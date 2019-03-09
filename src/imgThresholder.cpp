@@ -145,7 +145,7 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
 
         imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
         imagePairs[i].second.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
-        
+
         namedWindow(window_name, CV_WINDOW_AUTOSIZE);
 	    imshow(window_name, dstMat);
 
@@ -182,6 +182,7 @@ Mat thresholdImg(Mat originalImg)
         {
             for (int j = 0; j < grayVer.cols; j++)
             {
+                //cout << grayVer.at<Vec3b>(i,j) << "\n";
                 // make pixel white if less than threshold val
                 if (grayVer.at<unsigned char>(i,j) < thresholdVal)
                 {
@@ -209,7 +210,7 @@ Mat thresholdImg(Mat originalImg)
         float newThreshold = (meanFG+meanBG)/2.0f;
 
         //cout << fabs(newThreshold-thresholdVal) << "\n";
-        if (fabs(newThreshold-thresholdVal) < 5) // if within a certain limit, done thresholding
+        if (fabs(newThreshold-thresholdVal) < 1) // if within a certain limit, done thresholding
         {
             isDone = true;
         }
