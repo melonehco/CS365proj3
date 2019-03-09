@@ -178,21 +178,25 @@ Mat thresholdImg(Mat originalImg)
         int countFG = 0;
         int countBG = 0;
         // Divide the original image into black and white using the grayscale versiony
-        for (int i = 0; i< grayVer.rows; i++)
+        for (int i = 0; i < grayVer.rows; i++)
         {
-            for (int j = 0; j< grayVer.cols; j++)
+            for (int j = 0; j < grayVer.cols; j++)
             {
                 // make pixel white if less than threshold val
-                if (grayVer.at<Vec3b>(i,j)[0] < thresholdVal)
+                if (grayVer.at<unsigned char>(i,j) < thresholdVal)
                 {
                     thresholdedVer.at<Vec3b>(i,j)[0] = 255; // background
-                    sumBG += grayVer.at<Vec3b>(i,j)[0];
+                    thresholdedVer.at<Vec3b>(i,j)[1] = 255;
+                    thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
+                    sumBG += grayVer.at<unsigned char>(i,j);
                     countBG++;
                 }
                 else // make pixel black
                 {
                     thresholdedVer.at<Vec3b>(i,j)[0] = 0; // foreground
-                    sumFG += grayVer.at<Vec3b>(i,j)[0];
+                    thresholdedVer.at<Vec3b>(i,j)[1] = 0;
+                    thresholdedVer.at<Vec3b>(i,j)[2] = 0;
+                    sumFG += grayVer.at<unsigned char>(i,j);
                     countFG++;
                 }
             }
@@ -205,7 +209,7 @@ Mat thresholdImg(Mat originalImg)
         float newThreshold = (meanFG+meanBG)/2.0f;
 
         //cout << fabs(newThreshold-thresholdVal) << "\n";
-        if (fabs(newThreshold-thresholdVal) < 50) // if within a certain limit, done thresholding
+        if (fabs(newThreshold-thresholdVal) < 5) // if within a certain limit, done thresholding
         {
             isDone = true;
         }
