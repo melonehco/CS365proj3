@@ -160,7 +160,7 @@ Mat thresholdImg(Mat originalImg)
     cout << (float) mean(originalImg).val[0] << "\n";
 
     Mat thresholdedVer;
-    thresholdedVer.create(originalImg.size(), originalImg.type());
+    thresholdedVer.create(originalImg.size(), CV_8UC1);
 
     Mat grayVer;
     grayVer.create(originalImg.size(), originalImg.type());
@@ -186,17 +186,17 @@ Mat thresholdImg(Mat originalImg)
                 // make pixel white if less than threshold val
                 if (grayVer.at<unsigned char>(i,j) < thresholdVal)
                 {
-                    thresholdedVer.at<Vec3b>(i,j)[0] = 255; // background
-                    thresholdedVer.at<Vec3b>(i,j)[1] = 255;
-                    thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
+                    thresholdedVer.at<unsigned char>(i,j) = 255; // background
+                    // thresholdedVer.at<Vec3b>(i,j)[1] = 255;
+                    // thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
                     countBG++;
                 }
                 else // make pixel black
                 {
-                    thresholdedVer.at<Vec3b>(i,j)[0] = 0; // foreground
-                    thresholdedVer.at<Vec3b>(i,j)[1] = 0;
-                    thresholdedVer.at<Vec3b>(i,j)[2] = 0;
+                    thresholdedVer.at<unsigned char>(i,j) = 0; // foreground
+                    // thresholdedVer.at<Vec3b>(i,j)[1] = 0;
+                    // thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
                     countFG++;
                 }
@@ -249,16 +249,22 @@ int main( int argc, char *argv[] ) {
 	}
 	strcpy(dirName, argv[1]);
 
-
     vector<Mat> images = readInImageDir( dirName );
 
-
-
 	cout << "Thresholding images...\n\n";
-	vector< pair< Mat, Mat> > sortedImages = thresholdImageDB( images );
+	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
 	
-	displayImgsInSeparateWindows(sortedImages);
-	//displayImgsInSameWindow(sortedImages);
+	displayImgsInSeparateWindows(threshImages);
+	//displayImgsInSameWindow(threshImages);
+
+    cout << "\nAnalyzing connected components...\n";
+    vector<Mat> labelImages;
+    for (int i = 0; i < threshImages.size(); i++)
+    {
+        Mat labelImage(threshImages[i].second.size(), threshImages[i].second.type());
+        connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
+        labelImages.push_back(labelImage);
+    }
 
 	waitKey(0);
 		
