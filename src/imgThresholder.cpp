@@ -23,6 +23,11 @@
 using namespace std;
 using namespace cv;
 
+struct FeatureVector {
+    double fillRatio;
+    double bboxDimRatio;
+};
+
 /**
  * Reads in images from the given directory and returns them in a Mat vector 
  */
@@ -157,8 +162,6 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
  */
 Mat thresholdImg(Mat originalImg)
 {
-    cout << (float) mean(originalImg).val[0] << "\n";
-
     Mat thresholdedVer;
     thresholdedVer.create(originalImg.size(), CV_8UC1);
 
@@ -168,9 +171,8 @@ Mat thresholdImg(Mat originalImg)
     // Select initial threshold value, typically the mean 8-bit value of the original image.
     cvtColor(originalImg, grayVer, CV_BGR2GRAY);
     float thresholdVal = (float) mean(grayVer).val[0];
-    cout << mean(grayVer)<< "\n";
+    
     bool isDone = false;
-
     while (!isDone)
     {
         int sumFG = 0;
@@ -231,11 +233,116 @@ vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
     vector< pair < Mat, Mat > > thresholdedImgs;
     for (int i = 0; i < images.size(); i++)
     {
-        cout << "thresholding image " << i << "\n";
+        cout << "-> thresholding image " << i << "\n";
         Mat thresholdedImg = thresholdImg(images[i]);
         thresholdedImgs.push_back(make_pair(images[i],thresholdedImg));
     }
     return thresholdedImgs;
+}
+
+/*
+ * Returns a feature vector describing the specified region in the given region map
+ */
+FeatureVector calcFeatureVector(Mat &regionMap, int regionID, 
+                                vector<vector<Point>> &contoursOut, RotatedRect &bboxOut)
+{
+    FeatureVector features;
+
+    //create mask for selected region
+    //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
+    Mat1b mask_region = regionMap == regionID;
+    findContours(mask_region, contoursOut, RETR_EXTERNAL, CHAIN_APPROX_NONE);
+
+    //obtain rotated bounding box
+    RotatedRect bbox = minAreaRect(contoursOut[0]);
+    bboxOut.angle = bbox.angle;
+    bboxOut.center = bbox.center;
+    bboxOut.size = bbox.size;
+
+    //calculate bounding box fill ratio
+    double objArea = contourArea(contoursOut[0]);
+    double bboxArea = bbox.size.width * bbox.size.height;
+    double fillRatio = objArea / bboxArea;
+    features.fillRatio = fillRatio;
+
+    //calculate ratio of bbox dims
+    double bboxDimRatio = bbox.size.width / bbox.size.height;
+    if (bboxDimRatio > 1)
+    {
+        bboxDimRatio = 1.0 / bboxDimRatio;
+    }
+    features.bboxDimRatio = bboxDimRatio;
+    
+    Moments m = moments(contoursOut[0], true);
+
+    return features;
+}
+
+/* Returns a version of the input image with 3 color channels to allow for display
+ * Assumes the input image has a single channel of type unsigned char
+ */
+Mat makeImgMultChannels(Mat &orig)
+{
+    Mat result(orig.size(), CV_8UC3);
+
+    for (int i = 0; i < orig.rows; i++)
+    {
+        for (int j = 0; j < orig.cols; j++)
+        {
+            result.at<Vec3b>(i, j)[0] = orig.at<unsigned char>(i, j);
+            result.at<Vec3b>(i, j)[1] = orig.at<unsigned char>(i, j);
+            result.at<Vec3b>(i, j)[2] = orig.at<unsigned char>(i, j);
+        }
+    }
+
+    return result;
+}
+
+/* displays original images side by side with thresholded versions,
+ * with bounding boxes drawn on
+ */
+void displayBoundingBoxes(vector<pair<Mat, Mat>> imagePairs, vector<RotatedRect> boxes, vector<vector<Point>> contours)
+{
+    float scaledWidth = 500;
+	float scale, scaledHeight;
+
+	for (int i = 0; i < imagePairs.size(); i++)
+	{
+        //make multi-channel version of threshold image
+        Mat thresholdedCopy = makeImgMultChannels( imagePairs[i].second );
+
+        //draw in contour
+        Scalar color1 = Scalar(150, 50, 255);
+        drawContours( thresholdedCopy, contours, i, color1, 4); //thickness 4
+
+        //draw in bounding box
+        Point2f rect_points[4];
+        boxes[i].points( rect_points ); //copy points into array
+        Scalar color2 = Scalar(200, 255, 100);
+        for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
+        {
+            line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+        }
+
+        // resize both images
+        scale = scaledWidth / imagePairs[i].first.cols;
+        scaledHeight = imagePairs[i].first.rows * scale;
+        resize(imagePairs[i].first, imagePairs[i].first, Size(scaledWidth, scaledHeight));
+        resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
+
+        // put both images into one window
+
+        // destination window
+        Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
+
+        string window_name = "result " + to_string(i);
+
+        imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
+        thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+
+        namedWindow(window_name, CV_WINDOW_AUTOSIZE);
+	    imshow(window_name, dstMat);
+	}
 }
 
 int main( int argc, char *argv[] ) {
@@ -251,10 +358,10 @@ int main( int argc, char *argv[] ) {
 
     vector<Mat> images = readInImageDir( dirName );
 
-	cout << "Thresholding images...\n\n";
+	cout << "\nThresholding images...\n";
 	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
 	
-	displayImgsInSeparateWindows(threshImages);
+	//displayImgsInSeparateWindows(threshImages);
 	//displayImgsInSameWindow(threshImages);
 
     cout << "\nAnalyzing connected components...\n";
@@ -265,6 +372,27 @@ int main( int argc, char *argv[] ) {
         connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
         labelImages.push_back(labelImage);
     }
+
+    cout << "\nComputing features...\n";
+    vector<FeatureVector> features;
+    vector<vector<Point>> contours;
+    vector<RotatedRect> bboxes;
+    for (int i = 0; i < labelImages.size(); i++)
+    {
+        vector<vector<Point>> contoursOut;
+        RotatedRect bboxOut;
+
+        FeatureVector ft = calcFeatureVector(labelImages[i], 1, contoursOut, bboxOut);
+        features.push_back(ft);
+        contours.push_back(contoursOut[0]);
+        bboxes.push_back(bboxOut);
+
+        //just outputing to check
+        cout << i << ": fill ratio " << ft.fillRatio << "\n";
+        cout << i << ": bbox dim ratio " << ft.bboxDimRatio << "\n";
+    }
+
+    displayBoundingBoxes(threshImages, bboxes, contours);
 
 	waitKey(0);
 		
