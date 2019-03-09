@@ -177,7 +177,7 @@ Mat thresholdImg(Mat originalImg)
         int sumBG = 0;
         int countFG = 0;
         int countBG = 0;
-        // Divide the original image into black and white using the grayscale versiony
+        // Divide the original image into black and white using the grayscale version
         for (int i = 0; i < grayVer.rows; i++)
         {
             for (int j = 0; j < grayVer.cols; j++)
