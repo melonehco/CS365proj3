@@ -177,10 +177,10 @@ Mat thresholdImg(Mat originalImg)
         int sumBG = 0;
         int countFG = 0;
         int countBG = 0;
-        // Divide the original image into black and white using the grayscale version
-        for (int i = 0; i< grayVer.rows; i++)
+        // Divide the original image into black and white using the grayscale versiony
+        for (int i = 0; i < grayVer.rows; i++)
         {
-            for (int j = 0; j< grayVer.cols; j++)
+            for (int j = 0; j < grayVer.cols; j++)
             {
                 //cout << grayVer.at<Vec3b>(i,j) << "\n";
                 // make pixel white if less than threshold val
@@ -188,14 +188,14 @@ Mat thresholdImg(Mat originalImg)
                 {
                     thresholdedVer.at<Vec3b>(i,j)[0] = 255; // background
                     thresholdedVer.at<Vec3b>(i,j)[1] = 255;
-                    thresholdedVer.at<Vec3b>(i,j)[2] = 255;
+                    thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
                     countBG++;
                 }
                 else // make pixel black
                 {
                     thresholdedVer.at<Vec3b>(i,j)[0] = 0; // foreground
-                    thresholdedVer.at<Vec3b>(i,j)[1] = 0; 
+                    thresholdedVer.at<Vec3b>(i,j)[1] = 0;
                     thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
                     countFG++;
