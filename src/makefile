@@ -32,6 +32,9 @@ LDLIBS = -lopencv_core -lopencv_highgui -lopencv_video -lopencv_videoio -lopencv
 
 BINDIR = ../bin
 
+imgThresholder: imgThresholder.o
+	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
+
 task1: task1.o
 	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
 
