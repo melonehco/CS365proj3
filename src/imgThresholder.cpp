@@ -132,19 +132,15 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
         resize(imagePairs[i].first, imagePairs[i].first, Size(scaledWidth, scaledHeight));
         resize(imagePairs[i].second, imagePairs[i].second, Size(scaledWidth, scaledHeight));
 
-        // put both images into one window
-
         // destination window
         Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
 
         string window_name = "match " + to_string(i);
 
-        // vector<Mat> imgsVector;
-        // imgsVector.push_back(imagePairs[i].first);
-        // imgsVector.push_back(imagePairs[i].second);
-
+        // put both images into the window
         imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
         imagePairs[i].second.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+
 
         namedWindow(window_name, CV_WINDOW_AUTOSIZE);
 	    imshow(window_name, dstMat);
@@ -160,7 +156,7 @@ Mat thresholdImg(Mat originalImg)
     cout << (float) mean(originalImg).val[0] << "\n";
 
     Mat thresholdedVer;
-    thresholdedVer.create(originalImg.size(), CV_8UC1);
+    thresholdedVer.create(originalImg.size(), originalImg.type());
 
     Mat grayVer;
     grayVer.create(originalImg.size(), originalImg.type());
@@ -186,17 +182,17 @@ Mat thresholdImg(Mat originalImg)
                 // make pixel white if less than threshold val
                 if (grayVer.at<unsigned char>(i,j) < thresholdVal)
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 255; // background
-                    // thresholdedVer.at<Vec3b>(i,j)[1] = 255;
-                    // thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
+                    thresholdedVer.at<Vec3b>(i,j) = 255; // background
+                    thresholdedVer.at<Vec3b>(i,j)[1] = 255;
+                    thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
                     countBG++;
                 }
                 else // make pixel black
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 0; // foreground
-                    // thresholdedVer.at<Vec3b>(i,j)[1] = 0;
-                    // thresholdedVer.at<Vec3b>(i,j)[2] = 0;
+                    thresholdedVer.at<Vec3b>(i,j) = 0; // foreground
+                    thresholdedVer.at<Vec3b>(i,j)[1] = 0;
+                    thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
                     countFG++;
                 }
@@ -238,6 +234,46 @@ vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
     return thresholdedImgs;
 }
 
+/**
+ * Display the originals next to the connectedComponent visualizations.
+ * Takes in the original-thresholded image vector.
+ * Note that the built-in connectedComponents function must take in a 
+ * one-channel image, but our display function requires both to be 3-channel
+ */ 
+void displayConnectedComponents(vector< pair <Mat, Mat> > thresholdedImages)
+{
+
+    cout << "\nAnalyzing connected components...\n";
+    vector< pair< Mat, Mat> > labelMatsAndOriginals;
+    int testInt = 0;
+    for (int i = 0; i < thresholdedImages.size(); i++)
+    {
+        // a one-channel temp to use to do connectedComponents, since
+        // connectedComponents can only output to a 1 channel mat
+        Mat tempOneChannelMat(Size(thresholdedImages[i].second.cols, thresholdedImages[i].second.rows), thresholdedImages[i].second.type());
+        // make one-channel versions of the thresholded images and store them in the temp
+        cvtColor(thresholdedImages[i].second, tempOneChannelMat, CV_BGR2GRAY);
+        
+        testInt = connectedComponents(tempOneChannelMat, tempOneChannelMat); //8-connectedness by default
+
+        // Normalize the regions to fit over 0 to 255 so they can be visualized
+        normalize(tempOneChannelMat, tempOneChannelMat, 0, 255, NORM_MINMAX, CV_8U);
+
+        // Store the connectedComponents output in a RGB version, so 
+        // we can store this in the vector that will be displayed
+        Mat outputMat(Size(tempOneChannelMat.cols, tempOneChannelMat.rows), CV_8UC3, Scalar(0, 0, 0));
+        cvtColor(tempOneChannelMat,outputMat,CV_GRAY2BGR);
+
+        
+
+        labelMatsAndOriginals.push_back(make_pair(thresholdedImages[i].second,outputMat));
+
+        cout << "number of regions in image " << i << " : " << testInt << "\n";
+    }
+
+    displayImgsInSeparateWindows(labelMatsAndOriginals);
+}
+
 int main( int argc, char *argv[] ) {
     char dirName[256];
 
@@ -247,6 +283,7 @@ int main( int argc, char *argv[] ) {
 		cout << "Usage: |directory name|\n";
 		exit(-1);
 	}
+
 	strcpy(dirName, argv[1]);
 
     vector<Mat> images = readInImageDir( dirName );
@@ -254,17 +291,10 @@ int main( int argc, char *argv[] ) {
 	cout << "Thresholding images...\n\n";
 	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
 	
-	displayImgsInSeparateWindows(threshImages);
 	//displayImgsInSameWindow(threshImages);
+    
+    displayConnectedComponents(threshImages);
 
-    cout << "\nAnalyzing connected components...\n";
-    vector<Mat> labelImages;
-    for (int i = 0; i < threshImages.size(); i++)
-    {
-        Mat labelImage(threshImages[i].second.size(), threshImages[i].second.type());
-        connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
-        labelImages.push_back(labelImage);
-    }
 
 	waitKey(0);
 		
