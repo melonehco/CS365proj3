@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <numeric>
 #include <ctype.h>
+#include <iostream>
+#include <fstream>
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
@@ -26,6 +28,16 @@ using namespace cv;
 struct FeatureVector {
     double fillRatio;
     double bboxDimRatio;
+};
+
+struct ImgInfo {
+    Mat orig;
+    Mat thresholded;
+    Mat regionMap;
+    vector<vector<Point>> contours;
+    RotatedRect bbox;
+    FeatureVector features;
+    string label;
 };
 
 /**
@@ -240,28 +252,21 @@ vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
 }
 
 /**
- * Returns the denoised version of the thresholded images in a vector
- * of pairs of original-thresholded images. 
+ * Returns a denoised version of a given image matrix
  * Uses dilation first, followed by erosion
  */
-vector<pair <Mat,Mat> > getDenoisedThresholdedImgs(vector<pair <Mat,Mat> > imgPairMap)
+Mat getDenoisedImg(Mat img)
 {
-    vector<pair <Mat,Mat> > denoisedVector;
-
     //                                           shape          kernel size           starting point
     // Defaults:                               MORPH_RECT           3x3                    0,0                                  
     Mat dilationSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
 
     Mat erosionSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
+    Mat newImg(img.size(), img.type());
+    dilate( img, newImg, dilationSpecs );
+    erode( newImg, newImg, erosionSpecs );
 
-    for (int i = 0; i < imgPairMap.size(); i++)
-    {
-        Mat newImg(imgPairMap[i].second.size(), imgPairMap[i].second.type());
-        dilate( imgPairMap[i].second, newImg, dilationSpecs );
-        erode( newImg, newImg, erosionSpecs );
-        denoisedVector.push_back(make_pair(imgPairMap[i].first,newImg));
-    }
-    return denoisedVector;
+    return newImg;
 }
 
 /**
@@ -305,7 +310,7 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
     return labelMatsAndOriginals;
 }
 
-/*
+/**
  * Returns a feature vector describing the specified region in the given region map
  */
 FeatureVector calcFeatureVector(Mat &regionMap, int regionID, 
@@ -341,7 +346,27 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
     return features;
 }
 
-/* Returns a version of the input image with 3 color channels to allow for display
+/** 
+ * Creates ImgInfo for the given input image
+ * see ImgInfo struct at top for fields
+ */
+ImgInfo calcImgInfo (Mat &orig)
+{
+    ImgInfo result;
+    result.orig = orig;
+    result.thresholded = thresholdImg(orig);
+    result.thresholded = getDenoisedImg(result.thresholded);
+    result.regionMap.create(result.thresholded.size(), result.thresholded.type());
+    connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
+
+    //currently hardcoded to use region 1
+    result.features = calcFeatureVector(result.regionMap, 1, result.contours, result.bbox);
+
+    return result;
+}
+
+/** 
+ * Returns a version of the input image with 3 color channels to allow for display
  * Assumes the input image has a single channel of type unsigned char
  */
 Mat makeImgMultChannels(Mat &orig)
@@ -361,51 +386,96 @@ Mat makeImgMultChannels(Mat &orig)
     return result;
 }
 
-/* displays original images side by side with thresholded versions,
- * with bounding boxes drawn on
+/** 
+ * Displays original image side by side with thresholded versions,
+ * with bounding box and contour drawn on
  */
-void displayBoundingBoxes(vector<pair<Mat, Mat>> imagePairs, vector<RotatedRect> boxes, vector<vector<Point>> contours)
+void displayBBoxContour(string winName, ImgInfo &imgData)
 {
     float scaledWidth = 500;
 	float scale, scaledHeight;
 
-	for (int i = 0; i < imagePairs.size(); i++)
-	{
-        //make multi-channel version of threshold image
-        Mat thresholdedCopy = makeImgMultChannels( imagePairs[i].second );
+    //make multi-channel version of threshold image
+    Mat thresholdedCopy = makeImgMultChannels( imgData.thresholded );
 
-        //draw in contour
-        Scalar color1 = Scalar(150, 50, 255);
-        drawContours( thresholdedCopy, contours, i, color1, 4); //thickness 4
+    //draw in contour
+    Scalar color1 = Scalar(150, 50, 255);
+    drawContours( thresholdedCopy, imgData.contours, 0, color1, 4); //thickness 4
 
-        //draw in bounding box
-        Point2f rect_points[4];
-        boxes[i].points( rect_points ); //copy points into array
-        Scalar color2 = Scalar(200, 255, 100);
-        for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
-        {
-            line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
-        }
+    //draw in bounding box
+    Point2f rect_points[4];
+    imgData.bbox.points( rect_points ); //copy points into array
+    Scalar color2 = Scalar(200, 255, 100);
+    for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
+    {
+        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+    }
 
-        // resize both images
-        scale = scaledWidth / imagePairs[i].first.cols;
-        scaledHeight = imagePairs[i].first.rows * scale;
-        resize(imagePairs[i].first, imagePairs[i].first, Size(scaledWidth, scaledHeight));
-        resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
+    // resize both images
+    scale = scaledWidth / imgData.orig.cols;
+    scaledHeight = imgData.orig.rows * scale;
+    resize(imgData.orig, imgData.orig, Size(scaledWidth, scaledHeight));
+    resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
 
-        // put both images into one window
+    // put both images into one window
 
-        // destination window
-        Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
+    // destination window
+    Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
 
+    imgData.orig.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
+    thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+
+    namedWindow(winName, CV_WINDOW_AUTOSIZE);
+    imshow(winName, dstMat);
+}
+
+/**
+ * Displays each original image/thresholded image pair
+ * and requests a label from the user through the terminal
+ * returns the vector of label strings received
+ */
+vector<string> displayAndRequestLabels(vector<ImgInfo> &imagesData)
+{
+    vector<string> labels;
+    for (int i = 0; i < imagesData.size(); i++)
+    {
         string window_name = "result " + to_string(i);
+        displayBBoxContour(window_name, imagesData[i]);
+        waitKey(500); //make imshow go through before using cin
 
-        imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
-        thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+        //string label;
+        cout << "Please enter object label: ";
+        cin >> imagesData[i].label;
+        labels.push_back(imagesData[i].label);
+        destroyWindow(window_name);
+    }
+    return labels;
+}
 
-        namedWindow(window_name, CV_WINDOW_AUTOSIZE);
-	    imshow(window_name, dstMat);
-	}
+/* *
+ * Writes the given labels and their associated feature vectors out to a file
+ */
+void writeFeaturesToFile(vector<ImgInfo> &imagesData)
+{
+    ofstream outfile;
+    outfile.open ("featureDB.txt");
+
+    for (int i = 0; i < imagesData.size(); i++)
+    {
+        FeatureVector fv = imagesData[i].features;
+        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio);
+        outfile << imagesData[i].label << " " << ftStr << "\n";
+    }
+
+    outfile.close();
+}
+
+/* returns a label string for the given FeatureVector based on
+ * the given feature database
+ */
+string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector>> &db)
+{
+
 }
 
 int main( int argc, char *argv[] ) {
@@ -422,52 +492,26 @@ int main( int argc, char *argv[] ) {
 
     vector<Mat> images = readInImageDir( dirName );
 
-	cout << "\nThresholding images...\n";
-	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
-
-    cout << "\nDenoising images...\n";
-    threshImages = getDenoisedThresholdedImgs(threshImages);
-    
-    // Display the pairs of originals next to their thresholded versions
-	//displayImgsInSeparateWindows(threshImages);
-
-    /**
-    // Get a vector with pairs of the originals next to the CC visualizations
-    vector<pair<Mat, Mat> > labelImages = getConnectedComponentsVector(threshImages);
-    // Display the pairs
-    displayImgsInSeparateWindows(labelImages);
-    */
-
-    cout << "\nAnalyzing connected components...\n";
-    vector<Mat> labelImages;
-    for (int i = 0; i < threshImages.size(); i++)
+    //compile image info and map of labels w/ associated feature vectors, for classifying
+    cout << "\nProcessing training images...\n";
+    vector<ImgInfo> imagesData;
+    map<string, vector<FeatureVector>> knownObjectDB; //for classification stage
+    for (int i = 0; i < images.size(); i++)
     {
-        Mat labelImage(threshImages[i].second.size(), threshImages[i].second.type());
-        int numRegions = connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
-        labelImages.push_back(labelImage);
-        cout << "# regions in image " << i << ": " << numRegions << "\n";
+        imagesData.push_back( calcImgInfo(images[i]) );
+        knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
     }
 
-    cout << "\nComputing features...\n";
-    vector<FeatureVector> features;
-    vector<vector<Point>> contours;
-    vector<RotatedRect> bboxes;
-    for (int i = 0; i < labelImages.size(); i++)
-    {
-        vector<vector<Point>> contoursOut;
-        RotatedRect bboxOut;
+	//get object labels and write out to file
+    displayAndRequestLabels(imagesData);
+    cout << "\nWriting out to file...\n";
+    writeFeaturesToFile(imagesData);
 
-        FeatureVector ft = calcFeatureVector(labelImages[i], 1, contoursOut, bboxOut);
-        features.push_back(ft);
-        contours.push_back(contoursOut[0]);
-        bboxes.push_back(bboxOut);
-
-        //just outputting to check
-        cout << i << ": fill ratio " << ft.fillRatio << "\n";
-        cout << i << ": bbox dim ratio " << ft.bboxDimRatio << "\n";
-    }
-
-    displayBoundingBoxes(threshImages, bboxes, contours);
+    //ask for an image to classify
+    // string imgName;
+    // cout << "Please give an image filename for classification: ";
+    // cin >> imgName;
+    // string result = classifyFeatureVector(imgFt, knownObjectDB);
 
 	waitKey(0);
 		

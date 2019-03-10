@@ -4,3 +4,4 @@ bin/
 *.o
 .vscode/
 *.json
+src/featureDB.txt
