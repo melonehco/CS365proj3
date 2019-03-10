@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <numeric>
 #include <ctype.h>
+#include <iostream>
+#include <fstream>
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
@@ -298,51 +300,85 @@ Mat makeImgMultChannels(Mat &orig)
     return result;
 }
 
-/* displays original images side by side with thresholded versions,
- * with bounding boxes drawn on
+/* displays original image side by side with thresholded versions\,
+ * with bounding box and contour drawn on
  */
-void displayBoundingBoxes(vector<pair<Mat, Mat>> imagePairs, vector<RotatedRect> boxes, vector<vector<Point>> contours)
+void displayBBoxContour(string winName, pair<Mat, Mat> &imagePair, RotatedRect &box, vector<Point> &contour)
 {
     float scaledWidth = 500;
 	float scale, scaledHeight;
 
-	for (int i = 0; i < imagePairs.size(); i++)
-	{
-        //make multi-channel version of threshold image
-        Mat thresholdedCopy = makeImgMultChannels( imagePairs[i].second );
+    //make multi-channel version of threshold image
+    Mat thresholdedCopy = makeImgMultChannels( imagePair.second );
 
-        //draw in contour
-        Scalar color1 = Scalar(150, 50, 255);
-        drawContours( thresholdedCopy, contours, i, color1, 4); //thickness 4
+    //draw in contour
+    Scalar color1 = Scalar(150, 50, 255);
+    vector<vector<Point>> contours; //put into a vector of vectors to match drawContours param type
+    contours.push_back(contour);
+    drawContours( thresholdedCopy, contours, 0, color1, 4); //thickness 4
 
-        //draw in bounding box
-        Point2f rect_points[4];
-        boxes[i].points( rect_points ); //copy points into array
-        Scalar color2 = Scalar(200, 255, 100);
-        for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
-        {
-            line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
-        }
+    //draw in bounding box
+    Point2f rect_points[4];
+    box.points( rect_points ); //copy points into array
+    Scalar color2 = Scalar(200, 255, 100);
+    for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
+    {
+        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+    }
 
-        // resize both images
-        scale = scaledWidth / imagePairs[i].first.cols;
-        scaledHeight = imagePairs[i].first.rows * scale;
-        resize(imagePairs[i].first, imagePairs[i].first, Size(scaledWidth, scaledHeight));
-        resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
+    // resize both images
+    scale = scaledWidth / imagePair.first.cols;
+    scaledHeight = imagePair.first.rows * scale;
+    resize(imagePair.first, imagePair.first, Size(scaledWidth, scaledHeight));
+    resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
 
-        // put both images into one window
+    // put both images into one window
 
-        // destination window
-        Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
+    // destination window
+    Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
 
+    imagePair.first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
+    thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+
+    namedWindow(winName, CV_WINDOW_AUTOSIZE);
+    imshow(winName, dstMat);
+}
+
+/* displays each original image/thresholded image pair
+ * and requests a label from the user through the terminal
+ * returns the vector of label strings received
+ */
+vector<string> displayAndRequestLabels(vector<pair<Mat, Mat>> &imagePairs, vector<RotatedRect> &boxes, vector<vector<Point>> &contours)
+{
+    vector<string> labels;
+    for (int i = 0; i < imagePairs.size(); i++)
+    {
         string window_name = "result " + to_string(i);
+        displayBBoxContour(window_name, imagePairs[i], boxes[i], contours[i]);
+        waitKey(500); //make imshow go through before using cin
 
-        imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
-        thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
+        string label;
+        cout << "Please enter object label: ";
+        cin >> label;
+        labels.push_back(label);
+        destroyWindow(window_name);
+    }
+    return labels;
+}
 
-        namedWindow(window_name, CV_WINDOW_AUTOSIZE);
-	    imshow(window_name, dstMat);
-	}
+void writeFeaturesToFile(vector<string> labels, vector<FeatureVector> features)
+{
+    ofstream outfile;
+    outfile.open ("featureDB.txt");
+
+    for (int i = 0; i < labels.size(); i++)
+    {
+        FeatureVector fv = features[i];
+        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio);
+        outfile << labels[i] << " " << ftStr << "\n";
+    }
+
+    outfile.close();
 }
 
 int main( int argc, char *argv[] ) {
@@ -392,7 +428,9 @@ int main( int argc, char *argv[] ) {
         cout << i << ": bbox dim ratio " << ft.bboxDimRatio << "\n";
     }
 
-    displayBoundingBoxes(threshImages, bboxes, contours);
+    vector<string> labels = displayAndRequestLabels(threshImages, bboxes, contours);
+    cout << "\nWriting out to file...\n";
+    writeFeaturesToFile(labels, features);
 
 	waitKey(0);
 		

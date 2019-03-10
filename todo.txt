@@ -2,8 +2,11 @@
 - make region features part use most central region
     - use connectedComponents return value to be able to loop through components
 - add more features
-- use a struct to store features instead of a vector?
 - get video input working
+
+- store images and data assoc with 1 image as a struct?
+- error checking on writing to file?
+- how to differentiate training mode and classifying mode?
 
 feature options
 - the central moments (µ20, µ02 and µ22)
