@@ -155,6 +155,8 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
 
 /**
  * Returns the thresholded version of an image
+ * NOTE: The foreground is white and the background is black,
+ * because that's the way it needs to be for the built-in drawContours method
  */
 // TODO: Make this return a 3-channel image instead??
 Mat thresholdImg(Mat originalImg)
@@ -182,10 +184,10 @@ Mat thresholdImg(Mat originalImg)
             for (int j = 0; j < grayVer.cols; j++)
             {
                 //cout << grayVer.at<Vec3b>(i,j) << "\n";
-                // make pixel white if less than threshold val
-                if (grayVer.at<unsigned char>(i,j) < thresholdVal)
+                // make pixel white if less than threshold val (eg closer to 0)
+                if (grayVer.at<unsigned char>(i,j) > thresholdVal)
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 255; // background
+                    thresholdedVer.at<unsigned char>(i,j) = 0; // background
                     //thresholdedVer.at<Vec3b>(i,j)[1] = 255;
                     //thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
@@ -193,7 +195,7 @@ Mat thresholdImg(Mat originalImg)
                 }
                 else // make pixel black
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 0; // foreground
+                    thresholdedVer.at<unsigned char>(i,j) = 255; // foreground
                     //thresholdedVer.at<Vec3b>(i,j)[1] = 0;
                     //thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
@@ -235,6 +237,31 @@ vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
         thresholdedImgs.push_back(make_pair(images[i],thresholdedImg));
     }
     return thresholdedImgs;
+}
+
+/**
+ * Returns the denoised version of the thresholded images in a vector
+ * of pairs of original-thresholded images. 
+ * Uses dilation first, followed by erosion
+ */
+vector<pair <Mat,Mat> > getDenoisedThresholdedImgs(vector<pair <Mat,Mat> > imgPairMap)
+{
+    vector<pair <Mat,Mat> > denoisedVector;
+
+    //                                           shape          kernel size           starting point
+    // Defaults:                               MORPH_RECT           3x3                    0,0                                  
+    Mat dilationSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
+
+    Mat erosionSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
+
+    for (int i = 0; i < imgPairMap.size(); i++)
+    {
+        Mat newImg(imgPairMap[i].second.size(), imgPairMap[i].second.type());
+        dilate( imgPairMap[i].second, newImg, dilationSpecs );
+        erode( newImg, newImg, erosionSpecs );
+        denoisedVector.push_back(make_pair(imgPairMap[i].first,newImg));
+    }
+    return denoisedVector;
 }
 
 /**
@@ -286,19 +313,14 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
 {
     FeatureVector features;
 
-    cout << "HERE?\n";
     //create mask for selected region
     //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
     Mat1b mask_region = regionMap == regionID;
     findContours(mask_region, contoursOut, RETR_EXTERNAL, CHAIN_APPROX_NONE);
-    cout << "HERE??\n";
     //obtain rotated bounding box
     RotatedRect bbox = minAreaRect(contoursOut[0]);
-    cout << "HERE???\n";
     bboxOut.angle = bbox.angle;
-    cout << "HERE????\n";
     bboxOut.center = bbox.center;
-    cout << "HERE?????\n";
     bboxOut.size = bbox.size;
  
     //calculate bounding box fill ratio
@@ -402,6 +424,9 @@ int main( int argc, char *argv[] ) {
 
 	cout << "\nThresholding images...\n";
 	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
+
+    cout << "\nDenoising images...\n";
+    threshImages = getDenoisedThresholdedImgs(threshImages);
     
     // Display the pairs of originals next to their thresholded versions
 	//displayImgsInSeparateWindows(threshImages);
@@ -417,12 +442,10 @@ int main( int argc, char *argv[] ) {
     vector<Mat> labelImages;
     for (int i = 0; i < threshImages.size(); i++)
     {
-        cout << "A\n";
         Mat labelImage(threshImages[i].second.size(), threshImages[i].second.type());
-        cout << "AA\n";
-        connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
-        cout << "AAA\n";
+        int numRegions = connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
         labelImages.push_back(labelImage);
+        cout << "# regions in image " << i << ": " << numRegions << "\n";
     }
 
     cout << "\nComputing features...\n";
