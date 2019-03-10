@@ -30,6 +30,16 @@ struct FeatureVector {
     double bboxDimRatio;
 };
 
+struct ImgInfo {
+    Mat orig;
+    Mat thresholded;
+    Mat regionMap;
+    vector<vector<Point>> contours;
+    RotatedRect bbox;
+    FeatureVector features;
+    string label;
+};
+
 /**
  * Reads in images from the given directory and returns them in a Mat vector 
  */
@@ -225,21 +235,6 @@ Mat thresholdImg(Mat originalImg)
 }
 
 /**
- * Returns a vector of ordered pairs of the original images and their thresholded versions
- */
-vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
-{
-    vector< pair < Mat, Mat > > thresholdedImgs;
-    for (int i = 0; i < images.size(); i++)
-    {
-        cout << "-> thresholding image " << i << "\n";
-        Mat thresholdedImg = thresholdImg(images[i]);
-        thresholdedImgs.push_back(make_pair(images[i],thresholdedImg));
-    }
-    return thresholdedImgs;
-}
-
-/**
  * Returns a vector of pairs of originals and their connectedComponent visualizations.
  * Takes in the original-thresholded pairs image vector.
  * Note that the built-in connectedComponents function must take in a 
@@ -288,19 +283,14 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
 {
     FeatureVector features;
 
-    cout << "HERE?\n";
     //create mask for selected region
     //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
     Mat1b mask_region = regionMap == regionID;
     findContours(mask_region, contoursOut, RETR_EXTERNAL, CHAIN_APPROX_NONE);
-    cout << "HERE??\n";
     //obtain rotated bounding box
     RotatedRect bbox = minAreaRect(contoursOut[0]);
-    cout << "HERE???\n";
     bboxOut.angle = bbox.angle;
-    cout << "HERE????\n";
     bboxOut.center = bbox.center;
-    cout << "HERE?????\n";
     bboxOut.size = bbox.size;
  
     //calculate bounding box fill ratio
@@ -319,6 +309,23 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
     Moments m = moments(contoursOut[0], true);
 
     return features;
+}
+
+/* creates ImgInfo for the given input image
+ * see ImgInfo struct at top for fields
+ */
+ImgInfo calcImgInfo (Mat &orig)
+{
+    ImgInfo result;
+    result.orig = orig;
+    result.thresholded = thresholdImg(orig);
+    result.regionMap.create(result.thresholded.size(), result.thresholded.type());
+    connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
+
+    //currently hardcoded to use region 1
+    result.features = calcFeatureVector(result.regionMap, 1, result.contours, result.bbox);
+
+    return result;
 }
 
 /* Returns a version of the input image with 3 color channels to allow for display
@@ -344,23 +351,21 @@ Mat makeImgMultChannels(Mat &orig)
 /* displays original image side by side with thresholded versions\,
  * with bounding box and contour drawn on
  */
-void displayBBoxContour(string winName, pair<Mat, Mat> &imagePair, RotatedRect &box, vector<Point> &contour)
+void displayBBoxContour(string winName, ImgInfo &imgData)
 {
     float scaledWidth = 500;
 	float scale, scaledHeight;
 
     //make multi-channel version of threshold image
-    Mat thresholdedCopy = makeImgMultChannels( imagePair.second );
+    Mat thresholdedCopy = makeImgMultChannels( imgData.thresholded );
 
     //draw in contour
     Scalar color1 = Scalar(150, 50, 255);
-    vector<vector<Point>> contours; //put into a vector of vectors to match drawContours param type
-    contours.push_back(contour);
-    drawContours( thresholdedCopy, contours, 0, color1, 4); //thickness 4
+    drawContours( thresholdedCopy, imgData.contours, 0, color1, 4); //thickness 4
 
     //draw in bounding box
     Point2f rect_points[4];
-    box.points( rect_points ); //copy points into array
+    imgData.bbox.points( rect_points ); //copy points into array
     Scalar color2 = Scalar(200, 255, 100);
     for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
     {
@@ -368,9 +373,9 @@ void displayBBoxContour(string winName, pair<Mat, Mat> &imagePair, RotatedRect &
     }
 
     // resize both images
-    scale = scaledWidth / imagePair.first.cols;
-    scaledHeight = imagePair.first.rows * scale;
-    resize(imagePair.first, imagePair.first, Size(scaledWidth, scaledHeight));
+    scale = scaledWidth / imgData.orig.cols;
+    scaledHeight = imgData.orig.rows * scale;
+    resize(imgData.orig, imgData.orig, Size(scaledWidth, scaledHeight));
     resize(thresholdedCopy, thresholdedCopy, Size(scaledWidth, scaledHeight));
 
     // put both images into one window
@@ -378,7 +383,7 @@ void displayBBoxContour(string winName, pair<Mat, Mat> &imagePair, RotatedRect &
     // destination window
     Mat dstMat(Size(2*scaledWidth, scaledHeight), CV_8UC3, Scalar(0, 0, 0));
 
-    imagePair.first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
+    imgData.orig.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
     thresholdedCopy.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
 
     namedWindow(winName, CV_WINDOW_AUTOSIZE);
@@ -389,37 +394,47 @@ void displayBBoxContour(string winName, pair<Mat, Mat> &imagePair, RotatedRect &
  * and requests a label from the user through the terminal
  * returns the vector of label strings received
  */
-vector<string> displayAndRequestLabels(vector<pair<Mat, Mat>> &imagePairs, vector<RotatedRect> &boxes, vector<vector<Point>> &contours)
+vector<string> displayAndRequestLabels(vector<ImgInfo> &imagesData)
 {
     vector<string> labels;
-    for (int i = 0; i < imagePairs.size(); i++)
+    for (int i = 0; i < imagesData.size(); i++)
     {
         string window_name = "result " + to_string(i);
-        displayBBoxContour(window_name, imagePairs[i], boxes[i], contours[i]);
+        displayBBoxContour(window_name, imagesData[i]);
         waitKey(500); //make imshow go through before using cin
 
-        string label;
+        //string label;
         cout << "Please enter object label: ";
-        cin >> label;
-        labels.push_back(label);
+        cin >> imagesData[i].label;
+        labels.push_back(imagesData[i].label);
         destroyWindow(window_name);
     }
     return labels;
 }
 
-void writeFeaturesToFile(vector<string> labels, vector<FeatureVector> features)
+/* writes the given labels and their associated feature vectors out to a file
+ */
+void writeFeaturesToFile(vector<ImgInfo> &imagesData)
 {
     ofstream outfile;
     outfile.open ("featureDB.txt");
 
-    for (int i = 0; i < labels.size(); i++)
+    for (int i = 0; i < imagesData.size(); i++)
     {
-        FeatureVector fv = features[i];
+        FeatureVector fv = imagesData[i].features;
         string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio);
-        outfile << labels[i] << " " << ftStr << "\n";
+        outfile << imagesData[i].label << " " << ftStr << "\n";
     }
 
     outfile.close();
+}
+
+/* returns a label string for the given FeatureVector based on
+ * the given feature database
+ */
+string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector>> &db)
+{
+
 }
 
 int main( int argc, char *argv[] ) {
@@ -436,53 +451,26 @@ int main( int argc, char *argv[] ) {
 
     vector<Mat> images = readInImageDir( dirName );
 
-	cout << "\nThresholding images...\n";
-	vector< pair< Mat, Mat> > threshImages = thresholdImageDB( images );
-    
-    // Display the pairs of originals next to their thresholded versions
-	//displayImgsInSeparateWindows(threshImages);
-
-    /**
-    // Get a vector with pairs of the originals next to the CC visualizations
-    vector<pair<Mat, Mat> > labelImages = getConnectedComponentsVector(threshImages);
-    // Display the pairs
-    displayImgsInSeparateWindows(labelImages);
-    */
-
-    cout << "\nAnalyzing connected components...\n";
-    vector<Mat> labelImages;
-    for (int i = 0; i < threshImages.size(); i++)
+    //compile image info and map of labels w/ associated feature vectors, for classifying
+    cout << "\nProcessing training images...\n";
+    vector<ImgInfo> imagesData;
+    map<string, vector<FeatureVector>> knownObjectDB; //for classification stage
+    for (int i = 0; i < images.size(); i++)
     {
-        cout << "A\n";
-        Mat labelImage(threshImages[i].second.size(), threshImages[i].second.type());
-        cout << "AA\n";
-        connectedComponents(threshImages[i].second, labelImage); //8-connectedness by default
-        cout << "AAA\n";
-        labelImages.push_back(labelImage);
+        imagesData.push_back( calcImgInfo(images[i]) );
+        knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
     }
 
-    cout << "\nComputing features...\n";
-    vector<FeatureVector> features;
-    vector<vector<Point>> contours;
-    vector<RotatedRect> bboxes;
-    for (int i = 0; i < labelImages.size(); i++)
-    {
-        vector<vector<Point>> contoursOut;
-        RotatedRect bboxOut;
-
-        FeatureVector ft = calcFeatureVector(labelImages[i], 1, contoursOut, bboxOut);
-        features.push_back(ft);
-        contours.push_back(contoursOut[0]);
-        bboxes.push_back(bboxOut);
-
-        //just outputting to check
-        cout << i << ": fill ratio " << ft.fillRatio << "\n";
-        cout << i << ": bbox dim ratio " << ft.bboxDimRatio << "\n";
-    }
-
-    vector<string> labels = displayAndRequestLabels(threshImages, bboxes, contours);
+	//get object labels and write out to file
+    displayAndRequestLabels(imagesData);
     cout << "\nWriting out to file...\n";
-    writeFeaturesToFile(labels, features);
+    writeFeaturesToFile(imagesData);
+
+    //ask for an image to classify
+    // string imgName;
+    // cout << "Please give an image filename for classification: ";
+    // cin >> imgName;
+    // string result = classifyFeatureVector(imgFt, knownObjectDB);
 
 	waitKey(0);
 		
