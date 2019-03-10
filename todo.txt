@@ -1,0 +1,18 @@
+- display connected components output
+- make region features part use most central region
+    - use connectedComponents return value to be able to loop through components
+- add more features
+- use a struct to store features instead of a vector?
+- get video input working
+
+feature options
+- the central moments (µ20, µ02 and µ22)
+- the ratio of major axis to minor axis
+- the percentage fill within the oriented bounding box
+- eccentricity
+- hue
+- saturation
+- entropy of the matrix containing only the object pixels
+- more moments
+- the width to height ratio
+- eigenvalues of the object
