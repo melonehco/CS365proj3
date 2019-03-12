@@ -1,4 +1,4 @@
-- display connected components output (colored regions?)
++ display connected components output (colored regions?)
 - make region features part use most central region
     - use connectedComponents return value to be able to loop through components
 - add more features
