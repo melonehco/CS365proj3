@@ -173,6 +173,8 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
 
 /**
  * Returns the thresholded version of an image
+ * NOTE: The foreground is white and the background is black,
+ * because that's the way it needs to be for the built-in drawContours method
  */
 // TODO: Make this return a 3-channel image instead??
 Mat thresholdImg(Mat originalImg)
@@ -200,10 +202,10 @@ Mat thresholdImg(Mat originalImg)
             for (int j = 0; j < grayVer.cols; j++)
             {
                 //cout << grayVer.at<Vec3b>(i,j) << "\n";
-                // make pixel white if less than threshold val
-                if (grayVer.at<unsigned char>(i,j) < thresholdVal)
+                // make pixel white if less than threshold val (eg closer to 0)
+                if (grayVer.at<unsigned char>(i,j) > thresholdVal)
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 255; // background
+                    thresholdedVer.at<unsigned char>(i,j) = 0; // background
                     //thresholdedVer.at<Vec3b>(i,j)[1] = 255;
                     //thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
@@ -211,7 +213,7 @@ Mat thresholdImg(Mat originalImg)
                 }
                 else // make pixel black
                 {
-                    thresholdedVer.at<unsigned char>(i,j) = 0; // foreground
+                    thresholdedVer.at<unsigned char>(i,j) = 255; // foreground
                     //thresholdedVer.at<Vec3b>(i,j)[1] = 0;
                     //thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
@@ -238,6 +240,39 @@ Mat thresholdImg(Mat originalImg)
     }
 
     return thresholdedVer;
+}
+
+/**
+ * Returns a vector of ordered pairs of the original images and their thresholded versions
+ */
+vector<pair <Mat, Mat> > thresholdImageDB(vector<Mat> images)
+{
+    vector< pair < Mat, Mat > > thresholdedImgs;
+    for (int i = 0; i < images.size(); i++)
+    {
+        cout << "-> thresholding image " << i << "\n";
+        Mat thresholdedImg = thresholdImg(images[i]);
+        thresholdedImgs.push_back(make_pair(images[i],thresholdedImg));
+    }
+    return thresholdedImgs;
+}
+
+/**
+ * Returns a denoised version of a given image matrix
+ * Uses dilation first, followed by erosion
+ */
+Mat getDenoisedImg(Mat img)
+{
+    //                                           shape          kernel size           starting point
+    // Defaults:                               MORPH_RECT           3x3                    0,0                                  
+    Mat dilationSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
+
+    Mat erosionSpecs = getStructuringElement( MORPH_RECT,       Size( 5,5 ),          Point(0,0));
+    Mat newImg(img.size(), img.type());
+    dilate( img, newImg, dilationSpecs );
+    erode( newImg, newImg, erosionSpecs );
+
+    return newImg;
 }
 
 /**
@@ -281,7 +316,7 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
     return labelMatsAndOriginals;
 }
 
-/*
+/**
  * Returns a feature vector describing the specified region in the given region map
  */
 FeatureVector calcFeatureVector(Mat &regionMap, int regionID, 
@@ -317,7 +352,8 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
     return features;
 }
 
-/* creates ImgInfo for the given input image
+/** 
+ * Creates ImgInfo for the given input image
  * see ImgInfo struct at top for fields
  */
 ImgInfo calcImgInfo (Mat &orig)
@@ -325,6 +361,7 @@ ImgInfo calcImgInfo (Mat &orig)
     ImgInfo result;
     result.orig = orig;
     result.thresholded = thresholdImg(orig);
+    result.thresholded = getDenoisedImg(result.thresholded);
     result.regionMap.create(result.thresholded.size(), result.thresholded.type());
     connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
 
@@ -334,7 +371,8 @@ ImgInfo calcImgInfo (Mat &orig)
     return result;
 }
 
-/* Returns a version of the input image with 3 color channels to allow for display
+/** 
+ * Returns a version of the input image with 3 color channels to allow for display
  * Assumes the input image has a single channel of type unsigned char
  */
 Mat makeImgMultChannels(Mat &orig)
@@ -354,7 +392,8 @@ Mat makeImgMultChannels(Mat &orig)
     return result;
 }
 
-/* displays original image side by side with thresholded versions\,
+/** 
+ * Displays original image side by side with thresholded versions,
  * with bounding box and contour drawn on
  */
 void displayBBoxContour(string winName, ImgInfo &imgData)
@@ -396,7 +435,8 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
     imshow(winName, dstMat);
 }
 
-/* displays each original image/thresholded image pair
+/**
+ * Displays each original image/thresholded image pair
  * and requests a label from the user through the terminal
  * returns the vector of label strings received
  */
@@ -418,7 +458,8 @@ vector<string> displayAndRequestLabels(vector<ImgInfo> &imagesData)
     return labels;
 }
 
-/* writes the given labels and their associated feature vectors out to a file
+/* *
+ * Writes the given labels and their associated feature vectors out to a file
  */
 void writeFeaturesToFile(vector<ImgInfo> &imagesData)
 {
