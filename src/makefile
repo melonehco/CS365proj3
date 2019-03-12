@@ -35,20 +35,5 @@ BINDIR = ../bin
 imgThresholder: imgThresholder.o
 	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
 
-task1: task1.o
-	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
-
-task2: task2.o
-	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
-
-task3: task3.o
-	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
-
-task4: task4.o
-	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
-
-task5: task5.o
-	$(CC) $^ -o $(BINDIR)/$@ $(LDFLAGS) $(LDLIBS)
-
 clean:
 	rm -f *.o *~ 
