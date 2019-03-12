@@ -274,40 +274,74 @@ Mat getDenoisedImg(Mat img)
  * Takes in the original-thresholded pairs image vector.
  * Note that the built-in connectedComponents function must take in a 
  * one-channel image, but our display function requires both to be 3-channel
+ * Directly modifies the original thresholded images in that it de-noises them
  */     
 // TODO: Make this display regions in different colors
 vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > thresholdedImages)
 {
     cout << "\nAnalyzing connected components...\n";
-    vector< pair< Mat, Mat> > labelMatsAndOriginals;
-    int testInt = 0;
+
+    // De-noise the images first
     for (int i = 0; i < thresholdedImages.size(); i++)
     {
-        // a one-channel temp to use to do connectedComponents, since
-        // connectedComponents can only output to a 1 channel mat
-        Mat tempOneChannelMat(Size(thresholdedImages[i].second.cols, thresholdedImages[i].second.rows), thresholdedImages[i].second.type());
-        // make one-channel versions of the thresholded images and store them in the temp
-        cvtColor(thresholdedImages[i].second, tempOneChannelMat, CV_BGR2GRAY);
-        
-        testInt = connectedComponents(tempOneChannelMat, tempOneChannelMat); //8-connectedness by default
-
-        // Normalize the regions to fit over 0 to 255 so they can be visualized
-
-        normalize(tempOneChannelMat, tempOneChannelMat, 0, 255, NORM_MINMAX, CV_8U);
-
-        // Store the connectedComponents output in a RGB version, so 
-        // we can store this in the vector that will be displayed
-        Mat outputMat(Size(tempOneChannelMat.cols, tempOneChannelMat.rows), CV_8UC3, Scalar(0, 0, 0));
-        cvtColor(tempOneChannelMat,outputMat,CV_GRAY2BGR);
-
-        
-
-        labelMatsAndOriginals.push_back(make_pair(thresholdedImages[i].second,outputMat));
-
-        cout << "number of regions in image " << i << " : " << testInt << "\n";
+        thresholdedImages[i].second = getDenoisedImg(thresholdedImages[i].second);
     }
 
-    return labelMatsAndOriginals;
+    vector< pair< Mat, Mat> > origMatsAndColoredSections;
+    for (int i = 0; i < thresholdedImages.size(); i++)
+    {
+        // temp mat to store connected components version of image
+        // before we pass it into the RGB mat to return for display
+        Mat connCompMat(Size(thresholdedImages[i].second.cols, thresholdedImages[i].second.rows), thresholdedImages[i].second.type());
+
+        // TODO: Make use of testInt to know how many regions there are
+        int numSections = connectedComponents(thresholdedImages[i].second, connCompMat); //8-connectedness by default
+        
+        // Store the connectedComponents output in a RGB version, so 
+        // we can store this in the vector that will be displayed
+        Mat outputRGBMat(thresholdedImages[i].second.size(), CV_8UC3, Scalar(0,0,0));
+
+        cvtColor(thresholdedImages[i].second,outputRGBMat,CV_GRAY2BGR);   
+
+        // Vector of random colors to color each section in the image
+        vector< vector<int> > randColorValsForSections;
+        for (int j = 0; j < numSections; j++)
+        {
+            vector<int> colorVect;
+            // get # between 0 and 255 for all 3 channels
+            colorVect.push_back(rand() % 255);
+            colorVect.push_back(rand() % 255);
+            colorVect.push_back(rand() % 255);
+
+            randColorValsForSections.push_back(colorVect);
+        }
+        cout << "number of regions in image " << i << ": " << numSections << "\n";
+
+        // For each pixel in the cc mat, check which value it has and color accordingly
+        for (int row = 0; row< connCompMat.rows; row++)
+        {
+            for (int col = 0; col < connCompMat.cols; col++)
+            {                    
+                for (int k = 0; k < numSections; k++)
+                {   
+                    // segfault here!!!! Whyyyyy
+                    //cout << "original col,row val: " << (int)connCompMat.at<int>(Point(row, col)) << "\n";
+                    if (connCompMat.at<int>(row, col) == k)
+                    {
+                        outputRGBMat.at<Vec3b>(row, col)[0] = randColorValsForSections[k][0];
+                        outputRGBMat.at<Vec3b>(row, col)[1] = randColorValsForSections[k][1];
+                        outputRGBMat.at<Vec3b>(row, col)[2] = randColorValsForSections[k][2];
+                        break; // look at next pixel after we've colored this one
+                    }
+                }
+            }
+        }
+
+        // store in the output vector
+        origMatsAndColoredSections.push_back(make_pair(thresholdedImages[i].first,outputRGBMat));
+    }
+
+    return origMatsAndColoredSections;
 }
 
 /**
@@ -492,6 +526,8 @@ int main( int argc, char *argv[] ) {
 
     vector<Mat> images = readInImageDir( dirName );
 
+    /* TODO: uncomment this
+
     //compile image info and map of labels w/ associated feature vectors, for classifying
     cout << "\nProcessing training images...\n";
     vector<ImgInfo> imagesData;
@@ -502,10 +538,19 @@ int main( int argc, char *argv[] ) {
         knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
     }
 
-	//get object labels and write out to file
+    */
+
+    vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
+    displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
+
+    /* TODO: uncomment this 
+
+	// get object labels and write out to file 
     displayAndRequestLabels(imagesData);
     cout << "\nWriting out to file...\n";
     writeFeaturesToFile(imagesData);
+
+    */
 
     //ask for an image to classify
     // string imgName;
