@@ -1,4 +1,4 @@
-- display connected components output
+- display connected components output (colored regions?)
 - make region features part use most central region
     - use connectedComponents return value to be able to loop through components
 - add more features
@@ -11,8 +11,8 @@
 
 feature options
 - the central moments (µ20, µ02 and µ22)
-- the ratio of major axis to minor axis
-- the percentage fill within the oriented bounding box
++ the ratio of major axis to minor axis
++ the percentage fill within the oriented bounding box
 - eccentricity
 - hue
 - saturation
