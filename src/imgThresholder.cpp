@@ -18,7 +18,9 @@
 #include <numeric>
 #include <ctype.h>
 #include <iostream>
-#include <fstream>
+#include <fstream> //for writing out to file
+#include <iomanip> //for string formatting via a stream
+#include <cstring> //for strtok
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
@@ -43,7 +45,7 @@ struct ImgInfo {
 /**
  * Reads in images from the given directory and returns them in a Mat vector 
  */
-vector<Mat> readInImageDir( const char *dirname )
+vector<Mat> readInImageDir( const char *dirname, vector<string> &labelsOut )
 {
 	DIR *dirp;
 	struct dirent *dp;
@@ -77,6 +79,10 @@ vector<Mat> readInImageDir( const char *dirname )
                 exit(-1);
             }
             images.push_back( src );
+
+            //get label from filename
+            char *label = strtok ( dp->d_name, "." );
+            labelsOut.push_back( string(label) );
 		}
 	}
 
@@ -504,12 +510,160 @@ void writeFeaturesToFile(vector<ImgInfo> &imagesData)
     outfile.close();
 }
 
-/* returns a label string for the given FeatureVector based on
- * the given feature database
+/**
+ * Returns the standard deviation of the given vector
  */
-string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector>> &db)
+double stdDev( vector<double> numbers )
 {
+    int n = numbers.size();
+    double sum = 0.0, mean, sqDiffSum = 0.0;
+    sum = accumulate(numbers.begin(), numbers.end(), 0.0);
+    mean = sum/n;
 
+    for(int i = 0; i < n; ++i)
+    {
+        sqDiffSum += (numbers[i] - mean) * (numbers[i] - mean);
+    }
+
+    return sqrt(sqDiffSum / n);
+}
+
+/**
+ * Returns a FeatureVector containing the standard deviation of each feature
+ * in the given image data
+ */
+FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
+{
+    //collect features into vectors for std dev function
+    vector<double> fillRatioVector;
+    vector<double> bboxDimRatioVector;
+    for (ImgInfo ii : imagesData)
+    {
+        fillRatioVector.push_back( ii.features.fillRatio );
+        bboxDimRatioVector.push_back( ii.features.bboxDimRatio );
+    }
+
+    FeatureVector stdDevVector;
+    stdDevVector.fillRatio = stdDev( fillRatioVector );
+    stdDevVector.bboxDimRatio = stdDev( bboxDimRatioVector );
+
+    return stdDevVector;
+}
+
+/* Returns a label string for the given FeatureVector based on
+ * the given feature database and the given vector of features standard deviations
+ */
+string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector>> &db, FeatureVector &stdDevVector)
+{
+    //compare each known object type to the input
+    string result = "unknown";
+    double minDist = 0.65; //this value is just from empirical observation
+    for(map<string, vector<FeatureVector>>::value_type& objectType : db)
+    {
+        //cout << "looking at entry: " << objectType.first << "\n";
+
+        double dist = 0;
+        for ( FeatureVector features : objectType.second )
+        {
+            //metric: (x_1 - x_2) / stdev_x
+            dist += fabs(input.fillRatio - features.fillRatio) / stdDevVector.fillRatio;
+            dist += fabs(input.bboxDimRatio - features.bboxDimRatio) / stdDevVector.bboxDimRatio;
+        }
+        //average out distance across number of entries for this object type
+        dist /= (double) objectType.second.size();
+
+        //cout << "   distance: " << dist << "\n";
+
+        if ( dist < minDist ) //if we find a closer match, save it
+        {
+            result = objectType.first;
+            minDist = dist;
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Classifies objects on a live video feed
+ */
+int openVideoInput( map<string, vector<FeatureVector>> knownObjectDB, FeatureVector stdDevVector )
+{
+    cv::VideoCapture *capdev;
+
+	// open the video device
+	capdev = new cv::VideoCapture(0);
+	if( !capdev->isOpened() ) {
+		printf("Unable to open video device\n");
+		return(-1);
+	}
+
+	cv::Size refS( (int) capdev->get(cv::CAP_PROP_FRAME_WIDTH ),
+		       (int) capdev->get(cv::CAP_PROP_FRAME_HEIGHT));
+
+	printf("Expected size: %d %d\n", refS.width, refS.height);
+
+	cv::namedWindow("Input Video", 1);
+	cv::Mat frame;
+
+    cv::namedWindow("Thresholded", 1);
+    cv::Mat thresholdedFrame;
+    ostringstream strStream;
+
+	for(;;) {
+		*capdev >> frame; // get a new frame from the camera, treat as a stream
+
+        //do the single-image stuff but with this frame instead
+        thresholdedFrame = thresholdImg(frame);
+        ImgInfo info = calcImgInfo(frame);
+        string result = classifyFeatureVector( info.features, knownObjectDB, stdDevVector );
+
+        //draw in contour
+        Scalar color1 = Scalar(150, 50, 255);
+        drawContours( thresholdedFrame, info.contours, 0, color1, 4); //thickness 4
+
+        //draw in bounding box
+        Point2f rect_points[4];
+        info.bbox.points( rect_points ); //copy points into array
+        Scalar color2 = Scalar(200, 255, 100);
+        for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
+        {
+            line( thresholdedFrame, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+        }
+
+        //show label and feature values on display
+        putText(thresholdedFrame, result, Point(10,50),
+                FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+        
+        strStream << "fill ratio: " << std::fixed << std::setprecision(2) << info.features.fillRatio;
+        string fillFt = strStream.str();
+        strStream.str(std::string()); //clear stream
+        putText(thresholdedFrame, fillFt, Point(10,70),
+                FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+        strStream << "bbox dim ratio: " << std::fixed << std::setprecision(2) << info.features.bboxDimRatio;
+        string bboxFt = strStream.str();
+        strStream.str(std::string()); //clear stream
+        putText(thresholdedFrame, bboxFt, Point(10,90),
+                FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+		if( frame.empty() ) {
+		  printf("frame is empty\n");
+		  break;
+		}
+		
+		cv::imshow("Video", frame);
+        cv::imshow("Threshold", thresholdedFrame);
+
+		if(cv::waitKey(10) == 'q') {
+		    break;
+		}
+
+	}
+
+	// terminate the video capture
+	delete capdev;
+    return (0);
 }
 
 int main( int argc, char *argv[] ) {
@@ -524,39 +678,40 @@ int main( int argc, char *argv[] ) {
 
 	strcpy(dirName, argv[1]);
 
-    vector<Mat> images = readInImageDir( dirName );
+    //read in training images
+    vector<string> labels;
+    vector<Mat> images = readInImageDir( dirName, labels );
 
-    /* TODO: uncomment this
-
-    //compile image info and map of labels w/ associated feature vectors, for classifying
+    //compile image info
     cout << "\nProcessing training images...\n";
     vector<ImgInfo> imagesData;
-    map<string, vector<FeatureVector>> knownObjectDB; //for classification stage
     for (int i = 0; i < images.size(); i++)
     {
         imagesData.push_back( calcImgInfo(images[i]) );
+        imagesData[i].label = labels[i];
+    }
+
+    //calculate standard deviations of features
+    FeatureVector stdDevVector = calcFeatureStdDevVector( imagesData );
+
+	//get object labels and write out to file
+    cout << "\nWriting out to file...\n";
+    //writeFeaturesToFile(imagesData);
+
+    //compile map of labels w/ associated feature vectors, for classifying
+    map<string, vector<FeatureVector>> knownObjectDB; //for classification stage
+    for (int i = 0; i < images.size(); i++)
+    {
         knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
     }
 
-    */
+    // //Uncomment to display connected components visualizations
+    // vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
+    // displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
+    
 
-    vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
-    displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
-
-    /* TODO: uncomment this 
-
-	// get object labels and write out to file 
-    displayAndRequestLabels(imagesData);
-    cout << "\nWriting out to file...\n";
-    writeFeaturesToFile(imagesData);
-
-    */
-
-    //ask for an image to classify
-    // string imgName;
-    // cout << "Please give an image filename for classification: ";
-    // cin >> imgName;
-    // string result = classifyFeatureVector(imgFt, knownObjectDB);
+    cout << "\nOpening live video..\n";
+    openVideoInput( knownObjectDB, stdDevVector );
 
 	waitKey(0);
 		
