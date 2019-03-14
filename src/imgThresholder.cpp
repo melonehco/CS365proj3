@@ -47,8 +47,8 @@ struct ImgInfo
     string label;
 };
 
-// Define a function pointer type for using different distance metrics
-typedef double (*distFuncPtr)(FeatureVector&, vector<FeatureVector>, int, FeatureVector&);
+// Define a function pointer type for using different classifiers
+typedef string (*classifyFuncPtr)(FeatureVector&, map<string, vector<FeatureVector> >&, FeatureVector&);
 
 /**
  * Reads in images from the given directory and returns them in a Mat vector 
@@ -594,42 +594,34 @@ FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
 }
 
 /**
- * Returns the scaled euclidian distance 
+ * Returns the scaled Euclidian distance between the given feature vectors
+ * using the given standard deviation feature vector
  */
-double euclidianDistance(FeatureVector &input, vector<FeatureVector> featureVecs, int numFeaturesPerObj, FeatureVector &stdDevVector )
+double scaledEuclidianDist(FeatureVector &fv1, FeatureVector &fv2, FeatureVector &stdDevVector)
 {
+    const int numFeaturesPerObj = 3;
+
     double dist = 0;
-    for ( FeatureVector features : featureVecs )
-    {
-        //metric: (x_1 - x_2) / stdev_x
-        dist += fabs(input.fillRatio - features.fillRatio) / stdDevVector.fillRatio;
-        dist += fabs(input.bboxDimRatio - features.bboxDimRatio) / stdDevVector.bboxDimRatio;
-        dist += fabs(input.axisRatio - features.axisRatio) / stdDevVector.axisRatio;
-    }
-    //average out distance across number of entries for this object type
-    dist /= ((double) featureVecs.size()*numFeaturesPerObj);
+    dist += fabs(fv1.fillRatio - fv2.fillRatio) / stdDevVector.fillRatio;
+    dist += fabs(fv1.bboxDimRatio - fv2.bboxDimRatio) / stdDevVector.bboxDimRatio;
+    dist += fabs(fv1.axisRatio - fv2.axisRatio) / stdDevVector.axisRatio;
+
+    dist /= (double) numFeaturesPerObj;
+
     return dist;
 }
 
 /**
- * Returns the scaled KNN distance
+ * Returns the best label match for the input feature vector
+ * in the database of known objects based on scaled euclidian distance,
+ * using the given feature standard deviation vector
  */
-double knnDistance(FeatureVector &input, vector<FeatureVector> featureVecs, int numFeaturesPerObj, FeatureVector &stdDevVector )
-{
-    double dist = 0;
-    return dist;
-}
-
-/**
- * Returns a label string for the given FeatureVector based on
- * the given feature database and the given vector of features standard deviations
- */
-string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector, distFuncPtr distMetricToUse)
+string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector)
 {
     //compare each known object type to the input
     string result = "unknown";
 
-    // The minimum distance the object has had between its own feature vectors and the DB's
+    // The minimum distance found between the input feature vector and a label database entry
     double minDist = 0.65; //this value is just from empirical observation
 
     // for each label in the database
@@ -637,9 +629,15 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
     {
         //cout << "looking at entry: " << objectType.first << "\n";
 
-        int numFeaturesPerObject = 3;
-
-        double dist = distMetricToUse(input, objectType.second, numFeaturesPerObject, stdDevVector);
+        double dist = 0;
+        //for each feature vector stored with this label
+        for ( FeatureVector features : objectType.second )
+        {
+            //metric: (x_1 - x_2) / stdev_x
+            dist += scaledEuclidianDist(input, features, stdDevVector);
+        }
+        //average distance across number of entries for this object type/label
+        dist /= ((double) objectType.second.size());
 
         //cout << "   distance: " << dist << "\n";
 
@@ -654,9 +652,79 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
 }
 
 /**
+ * Returns true if the second value in the first pair is less than 
+ * the second value in the second pair. Used to sort distances for classifyByKNN.
+ */
+bool sortBySecondVal(const pair<string, double> &pair1, const pair<string, double> &pair2)
+{
+	return (pair1.second < pair2.second);
+}
+
+/**
+ * Returns the best label match for the given input feature vector,
+ * by running KNN with the given database of known objects,
+ * using the given standard deviation feature vector
+ */
+string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector)
+{
+    string result = "unknown";
+
+    //calculate and store distances from all feature vectors in database
+    vector<pair <string, double> > labelDistPairs;
+    // for each label in the database
+    for(map< string, vector<FeatureVector> >::value_type& objectType : db)
+    {
+        //cout << "looking at entry: " << objectType.first << "\n";
+
+        //for each feature vector stored with this label
+        for ( FeatureVector features : objectType.second )
+        {
+            double dist = scaledEuclidianDist(input, features, stdDevVector);
+            labelDistPairs.push_back( make_pair(objectType.first, dist) );
+        }
+    }
+
+    //sort by distance
+    sort(labelDistPairs.begin(), labelDistPairs.end(), sortBySecondVal);
+
+    //find most common label among top n matches
+    int n = 10;
+    int end = labelDistPairs.size() > n ? n : labelDistPairs.size(); //index to stop at
+    map<string, int> labelCounts; //count for each label in the top n
+    string curLabel, maxLabel; //current label in loop, most common label
+    int maxCount = 0;
+    for (int i = 0; i < end; i++) //count instances of each label
+    {
+        curLabel = labelDistPairs[i].first;
+        //update count map
+        if ( labelCounts.find(curLabel) == labelCounts.end() ) //not already in map
+        {
+            //add entry
+            labelCounts[curLabel] = 1;
+        }
+        else //found in map
+        {
+            labelCounts[curLabel] += 1;
+        }
+
+        //check if current label has been seen the most times
+        if ( labelCounts[curLabel] > maxCount )
+        {
+            maxCount = labelCounts[curLabel];
+            maxLabel = curLabel;
+        }
+    }
+    //TODO: keep as unknown if top matches aren't good matches
+    //set result to maxLabel if matches are good enough
+    result = maxLabel;
+
+    return result;
+}
+
+/**
  * Classifies objects on a live video feed
  */
-int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureVector stdDevVector, distFuncPtr distMetricToUse )
+int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureVector stdDevVector, classifyFuncPtr classifyFuncToUse )
 {
     cv::VideoCapture *capdev;
 
@@ -685,7 +753,7 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         //do the single-image stuff but with this frame instead
         thresholdedFrame = thresholdImg(frame);
         ImgInfo info = calcImgInfo(frame);
-        string result = classifyFeatureVector( info.features, knownObjectDB, stdDevVector, distMetricToUse);
+        string result = classifyFuncToUse( info.features, knownObjectDB, stdDevVector);
 
         //draw in contour
         Scalar color1 = Scalar(150, 50, 255);
@@ -744,11 +812,11 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
 int main( int argc, char *argv[] ) {
     char dirName[256];
 
-    distFuncPtr distMetricFuncToUse; 
-    map<string, distFuncPtr> stringToFuncMap;
-    stringToFuncMap["KNN"] = &knnDistance;
-	stringToFuncMap["EUC"] = &euclidianDistance;
-    distMetricFuncToUse = stringToFuncMap["EUC"];
+    classifyFuncPtr classifyFuncToUse; 
+    map<string, classifyFuncPtr> stringToFuncMap;
+    stringToFuncMap["KNN"] = &classifyByKNN;
+	stringToFuncMap["EUC"] = &classifyByEuclidianDist;
+    classifyFuncToUse = stringToFuncMap["EUC"];
 
 	// If user didn't give directory name
 	if(argc < 2) 
@@ -793,7 +861,7 @@ int main( int argc, char *argv[] ) {
     
 
     cout << "\nOpening live video..\n";
-    openVideoInput( knownObjectDB, stdDevVector, distMetricFuncToUse );
+    openVideoInput( knownObjectDB, stdDevVector, classifyFuncToUse );
 
 	waitKey(0);
 		

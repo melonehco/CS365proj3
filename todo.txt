@@ -3,9 +3,11 @@
     - use connectedComponents return value to be able to loop through components
 - add more features
 [DONE] make sure having multiple training images per object works
+- probably reorganize into multiple files if we can get it working
 
 - do the instructions mean that we choose between having a video training mode and image training input,
     or that we need both implemented?
+    - answer: we choose
 - error checking on writing to file?
 - how to differentiate training mode and classifying mode?
 - ability to read in preexisting feature db file? if preexisting, skip training mode?
