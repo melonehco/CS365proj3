@@ -491,6 +491,28 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
         line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
     }
 
+    //show label and feature values on display
+    putText(thresholdedCopy, imgData.label, Point(10,50),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+    ostringstream strStream;
+    strStream << "fill ratio: " << std::fixed << std::setprecision(2) << imgData.features.fillRatio;
+    string fillFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, fillFt, Point(10,70),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+    strStream << "bbox dim ratio: " << std::fixed << std::setprecision(2) << imgData.features.bboxDimRatio;
+    string bboxFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, bboxFt, Point(10,90),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+    strStream << "major-minor axis ratio: " << std::fixed << std::setprecision(2) << imgData.features.axisRatio;
+    string axisFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, axisFt, Point(10,110),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
     // resize both images
     scale = scaledWidth / imgData.orig.cols;
     scaledHeight = imgData.orig.rows * scale;
@@ -622,7 +644,7 @@ string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureV
     string result = "unknown";
 
     // The minimum distance found between the input feature vector and a label database entry
-    double minDist = 0.65; //this value is just from empirical observation
+    double minDist = 0.55; //this value is just from empirical observation
 
     // for each label in the database
     for(map< string, vector<FeatureVector> >::value_type& objectType : db)
@@ -687,15 +709,21 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
     //sort by distance
     sort(labelDistPairs.begin(), labelDistPairs.end(), sortBySecondVal);
 
-    //find most common label among top n matches
-    int n = 10;
-    int end = labelDistPairs.size() > n ? n : labelDistPairs.size(); //index to stop at
-    map<string, int> labelCounts; //count for each label in the top n
+    //minimum distance between input and database labels needed to consider it a match
+    double minDist = 0.55; //this value is just from empirical observation
+
+    //find most common label among top k matches
+    int k = 10;
+    int end = labelDistPairs.size() > k ? k : labelDistPairs.size(); //index to stop at
+    map<string, int> labelCounts; //count for each label in the top k
     string curLabel, maxLabel; //current label in loop, most common label
     int maxCount = 0;
+    double sumDist = 0.0;
     for (int i = 0; i < end; i++) //count instances of each label
     {
         curLabel = labelDistPairs[i].first;
+        sumDist += labelDistPairs[i].second;
+
         //update count map
         if ( labelCounts.find(curLabel) == labelCounts.end() ) //not already in map
         {
@@ -714,9 +742,11 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
             maxLabel = curLabel;
         }
     }
-    //TODO: keep as unknown if top matches aren't good matches
-    //set result to maxLabel if matches are good enough
-    result = maxLabel;
+    //set result to maxLabel if average match distance is small enough
+    if ( sumDist / end <= minDist )
+    {
+        result = maxLabel;
+    }
 
     return result;
 }
@@ -753,7 +783,7 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         //do the single-image stuff but with this frame instead
         thresholdedFrame = thresholdImg(frame);
         ImgInfo info = calcImgInfo(frame);
-        string result = classifyFuncToUse( info.features, knownObjectDB, stdDevVector);
+        string result = classifyFuncToUse(info.features, knownObjectDB, stdDevVector);
 
         //draw in contour
         Scalar color1 = Scalar(150, 50, 255);
@@ -844,8 +874,8 @@ int main( int argc, char *argv[] ) {
     //calculate standard deviations of features
     FeatureVector stdDevVector = calcFeatureStdDevVector( imagesData );
 
-	//get object labels and write out to file
-    cout << "\nWriting out to file...\n";
+	//write known label/feature data out to file
+    //cout << "\nWriting out to file...\n";
     //writeFeaturesToFile(imagesData);
 
     //compile map of labels w/ associated feature vectors, for classifying
@@ -858,12 +888,58 @@ int main( int argc, char *argv[] ) {
     // //Uncomment to display connected components visualizations
     // vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
     // displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
-    
 
-    cout << "\nOpening live video..\n";
-    openVideoInput( knownObjectDB, stdDevVector, classifyFuncToUse );
+    //ask user which kind of testing input to use
+    cout << "\nPlease enter 'p' for still photo testing input or 'v' for video testing input: ";
+    bool useVideo = true;
+    bool ready = false;
+    string answer;
+    while (!ready)
+    {
+        cin >> answer;
+        if ( answer == "p" )
+        {
+            useVideo = false;
+            ready = true;
+        }
+        else if ( answer == "v" )
+        {
+            ready = true;
+        }
+    }
 
-	waitKey(0);
+    //process training input
+    if ( useVideo )
+    {
+        cout << "\nOpening live video..\n";
+        openVideoInput( knownObjectDB, stdDevVector, classifyFuncToUse );
+    }
+    else
+    {
+        cout << "Please give an image directory for classification: ";
+        char testingDir[256];
+        cin >> testingDir;
+        
+        //read in testing images
+        vector<string> trueLabels; //actual labels from filenames
+        vector<Mat> testImages = readInImageDir( dirName, trueLabels );
+
+        //compile image info
+        cout << "\nProcessing testing images...\n";
+        vector<ImgInfo> testImagesData;
+        for (int i = 0; i < testImages.size(); i++)
+        {
+            cout << "Image #" << i << " is up now!\n";
+            ImgInfo ii = calcImgInfo(testImages[i]);
+            testImagesData.push_back( ii );
+            testImagesData[i].label = classifyFuncToUse( ii.features, knownObjectDB, stdDevVector);
+
+            string win_name = "testing image #" + to_string(i);
+            displayBBoxContour(win_name, testImagesData[i]);
+        }
+
+        waitKey(0); //close on key press
+    }
 		
 	printf("\nTerminating\n");
 
