@@ -2,7 +2,7 @@
 - make region features part use most central region, OR just ignore the specks
     - use connectedComponents return value to be able to loop through components
 - add more features
-- make sure having multiple training images per object works
+[DONE] make sure having multiple training images per object works
 
 - do the instructions mean that we choose between having a video training mode and image training input,
     or that we need both implemented?
@@ -15,7 +15,7 @@
 
 feature options
 - [WIP] the central moments (µ20, µ02 and µ22)
-- [WIP] the ratio of major axis to minor axis 
++ the ratio of major axis to minor axis 
 + the percentage fill within the oriented bounding box
 - eccentricity
 - hue (what does this mean??)

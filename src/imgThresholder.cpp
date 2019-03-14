@@ -47,6 +47,9 @@ struct ImgInfo
     string label;
 };
 
+// Define a function pointer type for using different distance metrics
+typedef double (*distFuncPtr)(FeatureVector&, vector<FeatureVector>, int, FeatureVector&);
+
 /**
  * Reads in images from the given directory and returns them in a Mat vector 
  */
@@ -360,14 +363,12 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
     FeatureVector featureVec;
     
     vector< vector<Point> > allContours;
-    cout << "blah0\n";
     //create mask for entire region and find contours with it
     //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
     Mat1b mask_region = regionMap > 0; // exclude bg (region val of 0)
     // "RETR_EXTERNAL" excludes inner contours; we only want top-level contours
     findContours(mask_region, allContours, RETR_EXTERNAL, CHAIN_APPROX_NONE);
     
-    cout << "blah1\n";
 
     // choose largest contour
     int largestContourIdx = 0; // default to first (top-left-most) contour
@@ -384,22 +385,20 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
         contoursOut.push_back(contour);
     }
 
-    cout << "blah2\n";
     // obtain rotated bounding box
     // NOTE: contoursOut[0] gets outermost contour level, eg not contours contained within other contours
-    cout << "Largest contour idx: " << largestContourIdx << "\n";
+
     RotatedRect bbox = minAreaRect(contoursOut[largestContourIdx]); 
-    cout << "blah2.0\n";
     bboxOut.angle = bbox.angle;
     bboxOut.center = bbox.center;
     bboxOut.size = bbox.size;
-    cout << "blah2.1\n";
+
     //calculate bounding box fill ratio
     double objArea = contourArea(contoursOut[largestContourIdx]);
     double bboxArea = bbox.size.width * bbox.size.height;
     double fillRatio = objArea / bboxArea;
     featureVec.fillRatio = fillRatio;
-    cout << "blah2.2\n";
+
     //calculate ratio of bbox dims
     double bboxDimRatio = bbox.size.width / bbox.size.height;
     if (bboxDimRatio > 1)
@@ -407,7 +406,7 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
         bboxDimRatio = 1.0 / bboxDimRatio;
     }
     featureVec.bboxDimRatio = bboxDimRatio;
-    cout << "blah3\n";
+
     // calculate ratio of major to minor axis
     // (x,y),(MA,ma),angle 
     //cout << contoursOut[i] << "\n";
@@ -421,7 +420,7 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
         axesRatio = 1.0 / axesRatio;
     }
     featureVec.axisRatio = axesRatio;
-    cout << "blah4\n";
+
     Moments m = moments(contoursOut[largestContourIdx], true);
     // m.mu20,m.mu02, m.mu22
 
@@ -434,7 +433,6 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
  */
 ImgInfo calcImgInfo (Mat &orig)
 {
-    cout << "hi1\n";
     ImgInfo result;
     result.orig = orig;
     result.thresholded = thresholdImg(orig);
@@ -444,7 +442,6 @@ ImgInfo calcImgInfo (Mat &orig)
 
     //currently hardcoded to use region 1
     result.features = calcFeatureVectors(result.regionMap, numRegions, result.contours, result.bbox);
-    cout << "hi2\n";
     return result;
 }
 
@@ -580,24 +577,54 @@ FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
     //collect features into vectors for std dev function
     vector<double> fillRatioVector;
     vector<double> bboxDimRatioVector;
+    vector<double> axisRatioVector;
     for (ImgInfo ii : imagesData)
     {
         fillRatioVector.push_back( ii.features.fillRatio );
         bboxDimRatioVector.push_back( ii.features.bboxDimRatio );
+        axisRatioVector.push_back( ii.features.axisRatio );
     }
 
     FeatureVector stdDevVector;
     stdDevVector.fillRatio = stdDev( fillRatioVector );
     stdDevVector.bboxDimRatio = stdDev( bboxDimRatioVector );
+    stdDevVector.axisRatio = stdDev ( axisRatioVector );
 
     return stdDevVector;
+}
+
+/**
+ * Returns the scaled euclidian distance 
+ */
+double euclidianDistance(FeatureVector &input, vector<FeatureVector> featureVecs, int numFeaturesPerObj, FeatureVector &stdDevVector )
+{
+    double dist = 0;
+    for ( FeatureVector features : featureVecs )
+    {
+        //metric: (x_1 - x_2) / stdev_x
+        dist += fabs(input.fillRatio - features.fillRatio) / stdDevVector.fillRatio;
+        dist += fabs(input.bboxDimRatio - features.bboxDimRatio) / stdDevVector.bboxDimRatio;
+        dist += fabs(input.axisRatio - features.axisRatio) / stdDevVector.axisRatio;
+    }
+    //average out distance across number of entries for this object type
+    dist /= ((double) featureVecs.size()*numFeaturesPerObj);
+    return dist;
+}
+
+/**
+ * Returns the scaled KNN distance
+ */
+double knnDistance(FeatureVector &input, vector<FeatureVector> featureVecs, int numFeaturesPerObj, FeatureVector &stdDevVector )
+{
+    double dist = 0;
+    return dist;
 }
 
 /**
  * Returns a label string for the given FeatureVector based on
  * the given feature database and the given vector of features standard deviations
  */
-string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector)
+string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector, distFuncPtr distMetricToUse)
 {
     //compare each known object type to the input
     string result = "unknown";
@@ -610,16 +637,9 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
     {
         //cout << "looking at entry: " << objectType.first << "\n";
 
-        double dist = 0;
-        for ( FeatureVector features : objectType.second )
-        {
-            //metric: (x_1 - x_2) / stdev_x
-            dist += fabs(input.fillRatio - features.fillRatio) / stdDevVector.fillRatio;
-            dist += fabs(input.bboxDimRatio - features.bboxDimRatio) / stdDevVector.bboxDimRatio;
-            dist += fabs(input.axisRatio - features.axisRatio) / stdDevVector.axisRatio;
-        }
-        //average out distance across number of entries for this object type
-        dist /= ((double) objectType.second.size()*3);
+        int numFeaturesPerObject = 3;
+
+        double dist = distMetricToUse(input, objectType.second, numFeaturesPerObject, stdDevVector);
 
         //cout << "   distance: " << dist << "\n";
 
@@ -636,7 +656,7 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
 /**
  * Classifies objects on a live video feed
  */
-int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureVector stdDevVector )
+int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureVector stdDevVector, distFuncPtr distMetricToUse )
 {
     cv::VideoCapture *capdev;
 
@@ -665,7 +685,7 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         //do the single-image stuff but with this frame instead
         thresholdedFrame = thresholdImg(frame);
         ImgInfo info = calcImgInfo(frame);
-        string result = classifyFeatureVector( info.features, knownObjectDB, stdDevVector );
+        string result = classifyFeatureVector( info.features, knownObjectDB, stdDevVector, distMetricToUse);
 
         //draw in contour
         Scalar color1 = Scalar(150, 50, 255);
@@ -724,6 +744,12 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
 int main( int argc, char *argv[] ) {
     char dirName[256];
 
+    distFuncPtr distMetricFuncToUse; 
+    map<string, distFuncPtr> stringToFuncMap;
+    stringToFuncMap["KNN"] = &knnDistance;
+	stringToFuncMap["EUC"] = &euclidianDistance;
+    distMetricFuncToUse = stringToFuncMap["EUC"];
+
 	// If user didn't give directory name
 	if(argc < 2) 
 	{
@@ -767,7 +793,7 @@ int main( int argc, char *argv[] ) {
     
 
     cout << "\nOpening live video..\n";
-    openVideoInput( knownObjectDB, stdDevVector );
+    openVideoInput( knownObjectDB, stdDevVector, distMetricFuncToUse );
 
 	waitKey(0);
 		
