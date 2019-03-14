@@ -1,5 +1,5 @@
 + display connected components output (colored regions?)
-- make region features part use most central region
+- make region features part use most central region, OR just ignore the specks
     - use connectedComponents return value to be able to loop through components
 - add more features
 - make sure having multiple training images per object works
@@ -11,15 +11,16 @@
 - ability to read in preexisting feature db file? if preexisting, skip training mode?
 - have command-line args for whether still images or video, whether using existing db?
 - use displayBBoxContour to combine both output windows into one?
+- make separate file for all the feature methods??
 
 feature options
-- the central moments (µ20, µ02 and µ22)
-+ the ratio of major axis to minor axis
+- [WIP] the central moments (µ20, µ02 and µ22)
+- [WIP] the ratio of major axis to minor axis 
 + the percentage fill within the oriented bounding box
 - eccentricity
-- hue
+- hue (what does this mean??)
 - saturation
 - entropy of the matrix containing only the object pixels
-- more moments
-- the width to height ratio
+- more moments (convex hull ratio?)
++ the width to height ratio
 - eigenvalues of the object

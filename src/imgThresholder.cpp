@@ -27,18 +27,23 @@
 using namespace std;
 using namespace cv;
 
-struct FeatureVector {
+// A grouping of features used to store object info in the image feature database
+struct FeatureVector 
+{
     double fillRatio;
     double bboxDimRatio;
+    double axisRatio;
 };
 
-struct ImgInfo {
+// A grouping of info about a given image. Can hold multiple objects at a time
+struct ImgInfo 
+{
     Mat orig;
     Mat thresholded;
     Mat regionMap;
-    vector<vector<Point>> contours;
-    RotatedRect bbox;
-    FeatureVector features;
+    vector< vector<Point> > contours;
+    RotatedRect bbox; // should also be vectors
+    FeatureVector features; // should also be vectors
     string label;
 };
 
@@ -206,16 +211,12 @@ Mat thresholdImg(Mat originalImg)
                 if (grayVer.at<unsigned char>(i,j) > thresholdVal)
                 {
                     thresholdedVer.at<unsigned char>(i,j) = 0; // background
-                    //thresholdedVer.at<Vec3b>(i,j)[1] = 255;
-                    //thresholdedVer.at<Vec3b>(i,j)[2] = 255; 
                     sumBG += grayVer.at<unsigned char>(i,j);
                     countBG++;
                 }
                 else // make pixel black
                 {
                     thresholdedVer.at<unsigned char>(i,j) = 255; // foreground
-                    //thresholdedVer.at<Vec3b>(i,j)[1] = 0;
-                    //thresholdedVer.at<Vec3b>(i,j)[2] = 0;
                     sumFG += grayVer.at<unsigned char>(i,j);
                     countFG++;
                 }
@@ -280,7 +281,6 @@ Mat getDenoisedImg(Mat img)
  * Takes in the original-thresholded pairs image vector.
  * Note that the built-in connectedComponents function must take in a 
  * one-channel image, but our display function requires both to be 3-channel
- * Directly modifies the original thresholded images in that it de-noises them
  */     
 // TODO: Make this display regions in different colors
 vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > thresholdedImages)
@@ -351,39 +351,81 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
 }
 
 /**
- * Returns a feature vector describing the specified region in the given region map
+ * Returns a feature vector describing the specified region in the given region map.
+ * Currently, we specify the region to be the one with the most points on its contour, 
+ * eg the biggest non-background region
  */
-FeatureVector calcFeatureVector(Mat &regionMap, int regionID, 
-                                vector<vector<Point>> &contoursOut, RotatedRect &bboxOut)
+FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut)
 {
-    FeatureVector features;
-
-    //create mask for selected region
+    FeatureVector featureVec;
+    
+    vector< vector<Point> > allContours;
+    cout << "blah0\n";
+    //create mask for entire region and find contours with it
     //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
-    Mat1b mask_region = regionMap == regionID;
-    findContours(mask_region, contoursOut, RETR_EXTERNAL, CHAIN_APPROX_NONE);
-    //obtain rotated bounding box
-    RotatedRect bbox = minAreaRect(contoursOut[0]);
+    Mat1b mask_region = regionMap > 0; // exclude bg (region val of 0)
+    // "RETR_EXTERNAL" excludes inner contours; we only want top-level contours
+    findContours(mask_region, allContours, RETR_EXTERNAL, CHAIN_APPROX_NONE);
+    
+    cout << "blah1\n";
+
+    // choose largest contour
+    int largestContourIdx = 0; // default to first (top-left-most) contour
+    for (int i = 0; i < allContours.size(); i++)
+    {
+        if (allContours[i].size() > allContours[largestContourIdx].size())
+        {
+            largestContourIdx = i;
+        }
+    }
+
+    for (vector<Point> contour : allContours)
+    {
+        contoursOut.push_back(contour);
+    }
+
+    cout << "blah2\n";
+    // obtain rotated bounding box
+    // NOTE: contoursOut[0] gets outermost contour level, eg not contours contained within other contours
+    cout << "Largest contour idx: " << largestContourIdx << "\n";
+    RotatedRect bbox = minAreaRect(contoursOut[largestContourIdx]); 
+    cout << "blah2.0\n";
     bboxOut.angle = bbox.angle;
     bboxOut.center = bbox.center;
     bboxOut.size = bbox.size;
- 
+    cout << "blah2.1\n";
     //calculate bounding box fill ratio
-    double objArea = contourArea(contoursOut[0]);
+    double objArea = contourArea(contoursOut[largestContourIdx]);
     double bboxArea = bbox.size.width * bbox.size.height;
     double fillRatio = objArea / bboxArea;
-    features.fillRatio = fillRatio;
+    featureVec.fillRatio = fillRatio;
+    cout << "blah2.2\n";
     //calculate ratio of bbox dims
     double bboxDimRatio = bbox.size.width / bbox.size.height;
     if (bboxDimRatio > 1)
     {
         bboxDimRatio = 1.0 / bboxDimRatio;
     }
-    features.bboxDimRatio = bboxDimRatio;
-    
-    Moments m = moments(contoursOut[0], true);
+    featureVec.bboxDimRatio = bboxDimRatio;
+    cout << "blah3\n";
+    // calculate ratio of major to minor axis
+    // (x,y),(MA,ma),angle 
+    //cout << contoursOut[i] << "\n";
+    RotatedRect rect = fitEllipse(contoursOut[largestContourIdx]);
+    // (the axes might need to be floats)
+    double majorAxisLength = rect.size.width  / 2;    // this would be the longer one
+    double minorAxisLength = rect.size.height / 2;
+    double axesRatio = majorAxisLength/minorAxisLength;
+    if (axesRatio > 1)
+    {
+        axesRatio = 1.0 / axesRatio;
+    }
+    featureVec.axisRatio = axesRatio;
+    cout << "blah4\n";
+    Moments m = moments(contoursOut[largestContourIdx], true);
+    // m.mu20,m.mu02, m.mu22
 
-    return features;
+    return featureVec;
 }
 
 /** 
@@ -392,16 +434,17 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionID,
  */
 ImgInfo calcImgInfo (Mat &orig)
 {
+    cout << "hi1\n";
     ImgInfo result;
     result.orig = orig;
     result.thresholded = thresholdImg(orig);
     result.thresholded = getDenoisedImg(result.thresholded);
     result.regionMap.create(result.thresholded.size(), result.thresholded.type());
-    connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
+    int numRegions = connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
 
     //currently hardcoded to use region 1
-    result.features = calcFeatureVector(result.regionMap, 1, result.contours, result.bbox);
-
+    result.features = calcFeatureVectors(result.regionMap, numRegions, result.contours, result.bbox);
+    cout << "hi2\n";
     return result;
 }
 
@@ -503,7 +546,7 @@ void writeFeaturesToFile(vector<ImgInfo> &imagesData)
     for (int i = 0; i < imagesData.size(); i++)
     {
         FeatureVector fv = imagesData[i].features;
-        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio);
+        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio) + " " + to_string(fv.axisRatio);
         outfile << imagesData[i].label << " " << ftStr << "\n";
     }
 
@@ -550,15 +593,20 @@ FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
     return stdDevVector;
 }
 
-/* Returns a label string for the given FeatureVector based on
+/**
+ * Returns a label string for the given FeatureVector based on
  * the given feature database and the given vector of features standard deviations
  */
-string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector>> &db, FeatureVector &stdDevVector)
+string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVector> > &db, FeatureVector &stdDevVector)
 {
     //compare each known object type to the input
     string result = "unknown";
+
+    // The minimum distance the object has had between its own feature vectors and the DB's
     double minDist = 0.65; //this value is just from empirical observation
-    for(map<string, vector<FeatureVector>>::value_type& objectType : db)
+
+    // for each label in the database
+    for(map< string, vector<FeatureVector> >::value_type& objectType : db)
     {
         //cout << "looking at entry: " << objectType.first << "\n";
 
@@ -568,13 +616,14 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
             //metric: (x_1 - x_2) / stdev_x
             dist += fabs(input.fillRatio - features.fillRatio) / stdDevVector.fillRatio;
             dist += fabs(input.bboxDimRatio - features.bboxDimRatio) / stdDevVector.bboxDimRatio;
+            dist += fabs(input.axisRatio - features.axisRatio) / stdDevVector.axisRatio;
         }
         //average out distance across number of entries for this object type
-        dist /= (double) objectType.second.size();
+        dist /= ((double) objectType.second.size()*3);
 
         //cout << "   distance: " << dist << "\n";
 
-        if ( dist < minDist ) //if we find a closer match, save it
+        if ( dist < minDist ) //if we find a closer object match, save it
         {
             result = objectType.first;
             minDist = dist;
@@ -587,7 +636,7 @@ string classifyFeatureVector(FeatureVector &input, map<string, vector<FeatureVec
 /**
  * Classifies objects on a live video feed
  */
-int openVideoInput( map<string, vector<FeatureVector>> knownObjectDB, FeatureVector stdDevVector )
+int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureVector stdDevVector )
 {
     cv::VideoCapture *capdev;
 
@@ -647,6 +696,12 @@ int openVideoInput( map<string, vector<FeatureVector>> knownObjectDB, FeatureVec
         putText(thresholdedFrame, bboxFt, Point(10,90),
                 FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
 
+        strStream << "major-minor axis ratio: " << std::fixed << std::setprecision(2) << info.features.axisRatio;
+        string axisFt = strStream.str();
+        strStream.str(std::string()); //clear stream
+        putText(thresholdedFrame, axisFt, Point(10,110),
+                FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
 		if( frame.empty() ) {
 		  printf("frame is empty\n");
 		  break;
@@ -687,6 +742,7 @@ int main( int argc, char *argv[] ) {
     vector<ImgInfo> imagesData;
     for (int i = 0; i < images.size(); i++)
     {
+        cout << "Image #" << i << " is up now!\n";
         imagesData.push_back( calcImgInfo(images[i]) );
         imagesData[i].label = labels[i];
     }
@@ -699,7 +755,7 @@ int main( int argc, char *argv[] ) {
     //writeFeaturesToFile(imagesData);
 
     //compile map of labels w/ associated feature vectors, for classifying
-    map<string, vector<FeatureVector>> knownObjectDB; //for classification stage
+    map< string, vector<FeatureVector> > knownObjectDB; //for classification stage
     for (int i = 0; i < images.size(); i++)
     {
         knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
