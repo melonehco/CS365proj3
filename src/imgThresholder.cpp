@@ -42,8 +42,9 @@ struct ImgInfo
     Mat thresholded;
     Mat regionMap;
     vector< vector<Point> > contours;
-    RotatedRect bbox; // should also be vectors
-    FeatureVector features; // should also be vectors
+    RotatedRect bbox;
+    FeatureVector features;
+    vector<Point> axisEndpts;
     string label;
 };
 
@@ -358,7 +359,7 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
  * Currently, we specify the region to be the one with the most points on its contour, 
  * eg the biggest non-background region
  */
-FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut)
+FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut, vector<Point> &axesOut)
 {
     FeatureVector featureVec;
     
@@ -421,6 +422,14 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
     }
     featureVec.axisRatio = axesRatio;
 
+    //get axes endpoints for output
+    Point2f vertices[4];
+    rect.points(vertices);
+    axesOut.push_back( Point((vertices[0] + vertices[1])/2.0) );
+    axesOut.push_back( Point((vertices[2] + vertices[3])/2.0) );
+    axesOut.push_back( Point((vertices[1] + vertices[2])/2.0) );
+    axesOut.push_back( Point((vertices[3] + vertices[0])/2.0) );
+
     Moments m = moments(contoursOut[largestContourIdx], true);
     // m.mu20,m.mu02, m.mu22
 
@@ -441,7 +450,7 @@ ImgInfo calcImgInfo (Mat &orig)
     int numRegions = connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
 
     //currently hardcoded to use region 1
-    result.features = calcFeatureVectors(result.regionMap, numRegions, result.contours, result.bbox);
+    result.features = calcFeatureVector(result.regionMap, numRegions, result.contours, result.bbox, result.axisEndpts);
     return result;
 }
 
@@ -479,17 +488,22 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
     Mat thresholdedCopy = makeImgMultChannels( imgData.thresholded );
 
     //draw in contour
-    Scalar color1 = Scalar(150, 50, 255);
-    drawContours( thresholdedCopy, imgData.contours, 0, color1, 4); //thickness 4
+    Scalar pink = Scalar(150, 50, 255);
+    drawContours( thresholdedCopy, imgData.contours, 0, pink, 4); //thickness 4
 
     //draw in bounding box
     Point2f rect_points[4];
     imgData.bbox.points( rect_points ); //copy points into array
-    Scalar color2 = Scalar(200, 255, 100);
+    Scalar green = Scalar(200, 255, 100);
     for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
     {
-        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], green, 4); //thickness 4
     }
+
+    //draw in axes
+    Scalar blue = Scalar(255, 200, 100);
+    line( thresholdedCopy, imgData.axisEndpts[0], imgData.axisEndpts[1], blue, 4);
+    line( thresholdedCopy, imgData.axisEndpts[2], imgData.axisEndpts[3], blue, 4);
 
     //show label and feature values on display
     putText(thresholdedCopy, imgData.label, Point(10,50),
@@ -529,29 +543,6 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
 
     namedWindow(winName, CV_WINDOW_AUTOSIZE);
     imshow(winName, dstMat);
-}
-
-/**
- * Displays each original image/thresholded image pair
- * and requests a label from the user through the terminal
- * returns the vector of label strings received
- */
-vector<string> displayAndRequestLabels(vector<ImgInfo> &imagesData)
-{
-    vector<string> labels;
-    for (int i = 0; i < imagesData.size(); i++)
-    {
-        string window_name = "result " + to_string(i);
-        displayBBoxContour(window_name, imagesData[i]);
-        waitKey(500); //make imshow go through before using cin
-
-        //string label;
-        cout << "Please enter object label: ";
-        cin >> imagesData[i].label;
-        labels.push_back(imagesData[i].label);
-        destroyWindow(window_name);
-    }
-    return labels;
 }
 
 /* *
@@ -798,6 +789,11 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
             line( thresholdedFrame, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
         }
 
+        //draw in axes
+        Scalar blue = Scalar(255, 200, 100);
+        line( thresholdedFrame, info.axisEndpts[0], info.axisEndpts[1], blue, 4);
+        line( thresholdedFrame, info.axisEndpts[2], info.axisEndpts[3], blue, 4);
+
         //show label and feature values on display
         putText(thresholdedFrame, result, Point(10,50),
                 FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
@@ -933,8 +929,8 @@ int main( int argc, char *argv[] ) {
     FeatureVector stdDevVector = calcFeatureStdDevVector( imagesData );
 
 	//write known label/feature data out to file
-    cout << "\nWriting out to file...\n";
-    writeFeaturesToFile(imagesData);
+    //cout << "\nWriting out to file...\n";
+    //writeFeaturesToFile(imagesData);
 
     //compile map of labels w/ associated feature vectors, for classifying
     map< string, vector<FeatureVector> > knownObjectDB; //for classification stage
@@ -990,15 +986,17 @@ int main( int argc, char *argv[] ) {
         {
             cout << "Image #" << i << " is up now!\n";
             ImgInfo ii = calcImgInfo(testImages[i]);
+            string label = classifyFuncToUse( ii.features, knownObjectDB, stdDevVector);
+            ii.label = label;
+            testLabels.push_back( label );
             testImagesData.push_back( ii );
-            testLabels.push_back( classifyFuncToUse( ii.features, knownObjectDB, stdDevVector) );
 
             string win_name = "testing image #" + to_string(i);
             displayBBoxContour(win_name, testImagesData[i]);
         }
 
-        cout << "\nWriting confusion matrix out to file...\n";
-        writeOutConfusionMatrix(trueLabels, testLabels);
+        //cout << "\nWriting confusion matrix out to file...\n";
+        //writeOutConfusionMatrix(trueLabels, testLabels);
 
         cout << "Press any key to quit.\n";
         waitKey(0); //close on key press
