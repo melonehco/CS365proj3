@@ -43,8 +43,9 @@ struct ImgInfo
     Mat thresholded;
     Mat regionMap;
     vector< vector<Point> > contours;
-    RotatedRect bbox; // should also be vectors
-    FeatureVector features; // should also be vectors
+    RotatedRect bbox;
+    FeatureVector features;
+    vector<Point> axisEndpts;
     string label;
 };
 
@@ -359,7 +360,7 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
  * Currently, we specify the region to be the one with the most points on its contour, 
  * eg the biggest non-background region
  */
-FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut)
+FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut, vector<Point> &axesOut)
 {
     FeatureVector featureVec;
     
@@ -433,6 +434,15 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<
     // scale them to have compariable value sizes (too small otherwise)
 
     featureVec.huMoments = huMoments;
+    //get axes endpoints for output
+    Point2f vertices[4];
+    rect.points(vertices);
+    axesOut.push_back( Point((vertices[0] + vertices[1])/2.0) );
+    axesOut.push_back( Point((vertices[2] + vertices[3])/2.0) );
+    axesOut.push_back( Point((vertices[1] + vertices[2])/2.0) );
+    axesOut.push_back( Point((vertices[3] + vertices[0])/2.0) );
+
+    // m.mu20,m.mu02, m.mu22
 
     return featureVec;
 }
@@ -451,7 +461,7 @@ ImgInfo calcImgInfo (Mat &orig)
     int numRegions = connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
 
     //currently hardcoded to use region 1
-    result.features = calcFeatureVector(result.regionMap, numRegions, result.contours, result.bbox);
+    result.features = calcFeatureVector(result.regionMap, numRegions, result.contours, result.bbox, result.axisEndpts);
     return result;
 }
 
@@ -489,17 +499,44 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
     Mat thresholdedCopy = makeImgMultChannels( imgData.thresholded );
 
     //draw in contour
-    Scalar color1 = Scalar(150, 50, 255);
-    drawContours( thresholdedCopy, imgData.contours, 0, color1, 4); //thickness 4
+    Scalar pink = Scalar(150, 50, 255);
+    drawContours( thresholdedCopy, imgData.contours, 0, pink, 4); //thickness 4
 
     //draw in bounding box
     Point2f rect_points[4];
     imgData.bbox.points( rect_points ); //copy points into array
-    Scalar color2 = Scalar(200, 255, 100);
+    Scalar green = Scalar(200, 255, 100);
     for ( int j = 0; j < 4; j++ ) //draw a line between each pair of points
     {
-        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
+        line( thresholdedCopy, rect_points[j], rect_points[(j+1)%4], green, 4); //thickness 4
     }
+
+    //draw in axes
+    Scalar blue = Scalar(255, 200, 100);
+    line( thresholdedCopy, imgData.axisEndpts[0], imgData.axisEndpts[1], blue, 4);
+    line( thresholdedCopy, imgData.axisEndpts[2], imgData.axisEndpts[3], blue, 4);
+
+    //show label and feature values on display
+    putText(thresholdedCopy, imgData.label, Point(10,50),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+    ostringstream strStream;
+    strStream << "fill ratio: " << std::fixed << std::setprecision(2) << imgData.features.fillRatio;
+    string fillFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, fillFt, Point(10,70),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+    strStream << "bbox dim ratio: " << std::fixed << std::setprecision(2) << imgData.features.bboxDimRatio;
+    string bboxFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, bboxFt, Point(10,90),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+    strStream << "major-minor axis ratio: " << std::fixed << std::setprecision(2) << imgData.features.axisRatio;
+    string axisFt = strStream.str();
+    strStream.str(std::string()); //clear stream
+    putText(thresholdedCopy, axisFt, Point(10,110),
+            FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
 
     // resize both images
     scale = scaledWidth / imgData.orig.cols;
@@ -517,29 +554,6 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
 
     namedWindow(winName, CV_WINDOW_AUTOSIZE);
     imshow(winName, dstMat);
-}
-
-/**
- * Displays each original image/thresholded image pair
- * and requests a label from the user through the terminal
- * returns the vector of label strings received
- */
-vector<string> displayAndRequestLabels(vector<ImgInfo> &imagesData)
-{
-    vector<string> labels;
-    for (int i = 0; i < imagesData.size(); i++)
-    {
-        string window_name = "result " + to_string(i);
-        displayBBoxContour(window_name, imagesData[i]);
-        waitKey(500); //make imshow go through before using cin
-
-        //string label;
-        cout << "Please enter object label: ";
-        cin >> imagesData[i].label;
-        labels.push_back(imagesData[i].label);
-        destroyWindow(window_name);
-    }
-    return labels;
 }
 
 /* *
@@ -732,15 +746,21 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
     //sort by distance
     sort(labelDistPairs.begin(), labelDistPairs.end(), sortBySecondVal);
 
-    //find most common label among top n matches
+    //minimum distance between input and database labels needed to consider it a match
+    double minDist = 0.55; //this value is just from empirical observation
+
+    //find most common label among top k matches
     int k = 10;
     int end = labelDistPairs.size() > k ? k : labelDistPairs.size(); //index to stop at
-    map<string, int> labelCounts; //count for each label in the top n
+    map<string, int> labelCounts; //count for each label in the top k
     string curLabel, maxLabel; //current label in loop, most common label
     int maxCount = 0;
+    double sumDist = 0.0;
     for (int i = 0; i < end; i++) //count instances of each label
     {
         curLabel = labelDistPairs[i].first;
+        sumDist += labelDistPairs[i].second;
+
         //update count map
         if ( labelCounts.find(curLabel) == labelCounts.end() ) //not already in map
         {
@@ -759,9 +779,11 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
             maxLabel = curLabel;
         }
     }
-    //TODO: keep as unknown if top matches aren't good matches
-    //set result to maxLabel if matches are good enough
-    result = maxLabel;
+    //set result to maxLabel if average match distance is small enough
+    if ( sumDist / end <= minDist )
+    {
+        result = maxLabel;
+    }
 
     return result;
 }
@@ -798,7 +820,7 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         //do the single-image stuff but with this frame instead
         thresholdedFrame = thresholdImg(frame);
         ImgInfo info = calcImgInfo(frame);
-        string result = classifyFuncToUse( info.features, knownObjectDB, stdDevVector);
+        string result = classifyFuncToUse(info.features, knownObjectDB, stdDevVector);
 
         //draw in contour
         Scalar color1 = Scalar(150, 50, 255);
@@ -812,6 +834,11 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         {
             line( thresholdedFrame, rect_points[j], rect_points[(j+1)%4], color2, 4); //thickness 4
         }
+
+        //draw in axes
+        Scalar blue = Scalar(255, 200, 100);
+        line( thresholdedFrame, info.axisEndpts[0], info.axisEndpts[1], blue, 4);
+        line( thresholdedFrame, info.axisEndpts[2], info.axisEndpts[3], blue, 4);
 
         //show label and feature values on display
         putText(thresholdedFrame, result, Point(10,50),
@@ -863,6 +890,64 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
     return (0);
 }
 
+/**
+ * Write confusion matrix into a file confusion.csv
+ * given the true labels and the testing result labels
+ */
+void writeOutConfusionMatrix(vector<string> trueLabels, vector<string> testLabels)
+{
+    ofstream outfile;
+    outfile.open ("confusion.csv");
+
+    //get a list of all label options
+    vector<string> labelList(trueLabels);
+    sort( labelList.begin(), labelList.end() );
+    vector<string>::iterator newEnd = unique( labelList.begin(), labelList.end() );
+    labelList.resize(std::distance(labelList.begin(), newEnd)); 
+    int numLabels = labelList.size();
+
+    cout << "there are " << numLabels << " labels\n";
+
+    //write top line (column headers/true labels)
+    outfile << "Predicted/True";
+    map<string, int> labelToIDX; //stores the matrix idx assigned to each label
+    for (int i = 0; i < numLabels; i++)
+    {
+        outfile << "," << labelList[i];
+        labelToIDX[labelList[i]] = i;
+    }
+    outfile << "\n";
+
+    //count up all entries in confusion matrix
+    int confusionMatrix[numLabels][numLabels] = {0}; //set all entries to 0
+    for (int i = 0; i < numLabels; i++)
+    {
+        confusionMatrix[0][i] = 0;
+    }
+    
+    for (int i = 0; i < trueLabels.size(); i++) //i is index in both true and test labels
+    {
+        int col = labelToIDX[trueLabels[i]]; //columns are true labels
+        int row = labelToIDX[testLabels[i]]; //rows are predicted labels
+        confusionMatrix[row][col] += 1;
+    }
+
+    //write out lines of confusion matrix
+    for (int i = 0; i < numLabels; i++)
+    {
+        outfile << labelList[i]; //row name
+
+        for (int j = 0; j < numLabels; j++) //for each entry in this row
+        {
+            outfile << "," << to_string( confusionMatrix[i][j] );
+        }
+
+        outfile << "\n";
+    }
+
+    outfile.close();
+}
+
 int main( int argc, char *argv[] ) {
     char dirName[256];
 
@@ -870,7 +955,7 @@ int main( int argc, char *argv[] ) {
     map<string, classifyFuncPtr> stringToFuncMap;
     stringToFuncMap["KNN"] = &classifyByKNN;
 	stringToFuncMap["EUC"] = &classifyByEuclidianDist;
-    classifyFuncToUse = stringToFuncMap["EUC"];
+    classifyFuncToUse = stringToFuncMap["KNN"];
 
 	// If user didn't give directory name
 	if(argc < 2) 
@@ -898,8 +983,8 @@ int main( int argc, char *argv[] ) {
     //calculate standard deviations of features
     FeatureVector stdDevVector = calcFeatureStdDevVector( imagesData );
 
-	//get object labels and write out to file
-    cout << "\nWriting out to file...\n";
+	//write known label/feature data out to file
+    //cout << "\nWriting out to file...\n";
     //writeFeaturesToFile(imagesData);
 
     //compile map of labels w/ associated feature vectors, for classifying
@@ -912,12 +997,65 @@ int main( int argc, char *argv[] ) {
     // //Uncomment to display connected components visualizations
     // vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
     // displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
-    
 
-    cout << "\nOpening live video..\n";
-    openVideoInput( knownObjectDB, stdDevVector, classifyFuncToUse );
+    //ask user which kind of testing input to use
+    cout << "\nPlease enter 'p' for still photo testing input or 'v' for video testing input: ";
+    bool useVideo = true;
+    bool ready = false;
+    string answer;
+    while (!ready)
+    {
+        cin >> answer;
+        if ( answer == "p" )
+        {
+            useVideo = false;
+            ready = true;
+        }
+        else if ( answer == "v" )
+        {
+            ready = true;
+        }
+    }
 
-	waitKey(0);
+    //process training input
+    if ( useVideo )
+    {
+        cout << "\nOpening live video..\n";
+        openVideoInput( knownObjectDB, stdDevVector, classifyFuncToUse );
+    }
+    else
+    {
+        cout << "Please give an image directory for classification: ";
+        char testingDir[256];
+        cin >> testingDir;
+        
+        //read in testing images
+        vector<string> trueLabels; //actual labels from filenames
+        vector<Mat> testImages = readInImageDir( testingDir, trueLabels );
+
+        //compile image info
+        cout << "\nProcessing testing images...\n";
+        vector<ImgInfo> testImagesData;
+        vector<string> testLabels;
+        for (int i = 0; i < testImages.size(); i++)
+        {
+            cout << "Image #" << i << " is up now!\n";
+            ImgInfo ii = calcImgInfo(testImages[i]);
+            string label = classifyFuncToUse( ii.features, knownObjectDB, stdDevVector);
+            ii.label = label;
+            testLabels.push_back( label );
+            testImagesData.push_back( ii );
+
+            string win_name = "testing image #" + to_string(i);
+            displayBBoxContour(win_name, testImagesData[i]);
+        }
+
+        //cout << "\nWriting confusion matrix out to file...\n";
+        //writeOutConfusionMatrix(trueLabels, testLabels);
+
+        cout << "Press any key to quit.\n";
+        waitKey(0); //close on key press
+    }
 		
 	printf("\nTerminating\n");
 
