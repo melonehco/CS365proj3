@@ -1,10 +1,12 @@
-/* imgThresholder.cpp
- * Thresholds an image
+/* classifier.cpp
+ * Classifies given image or video input after scanning an 
+ * image database first in order to gather data about all object categories.
  * 
  * to run:
- * <path-to-bin>/bin/task1 <# results to show> <optional db directory>
+ * make classifier
+ * <path-to-bin>/classifier <path-to-data>/desired-training-images
  * 
- * Zena Abulhab and Melody Mao
+ * Melody Mao & Zena Abulhab
  * CS365 Spring 2019
  * Project 3
  */
@@ -103,51 +105,6 @@ vector<Mat> readInImageDir( const char *dirname, vector<string> &labelsOut )
 }
 
 /**
- * Displays both the query image and all of the result images in the same window
- */
-void displayImgsInSameWindow(vector<Mat> images)
-{
-	int numRows, numCols;
-	int imgsSqrt = (int)sqrt(images.size());
-	// assume each image in the set has same dimensions
-	int indivImgHeight = images[0].rows;
-	int indivImgWidth = images[0].cols;
-
-	numCols = imgsSqrt;
-	// account for extra row(s) for remaining image(s), and round up
-	numRows = ceil((float)images.size()/(float)numCols);  
-
-	//                     width                 height         color channel & initial color vals
-	Mat dstMat(Size(numCols*indivImgWidth, numRows*indivImgHeight), CV_8UC3, Scalar(0, 0, 0));
-
-	int curImgIdx = 0;
-	for (int i = 0; i < numRows; i++)
-	{
-		for (int j = 0; j < numCols; j++)
-		{
-			if (curImgIdx == images.size())
-			{
-				break;
-			}
-			images[curImgIdx].copyTo(dstMat(Rect(j*indivImgWidth, i*indivImgHeight, indivImgWidth, indivImgHeight)));
-			curImgIdx ++;
-		}
-	}
-
-	// Shrink the collective image down after all smaller images are in it
-	float scaledWidth = 600;
-	float scale, scaledHeight;
-	scale = scaledWidth / dstMat.cols;
-	scaledHeight = dstMat.rows * scale;
-
-	resize(dstMat,dstMat, Size(scaledWidth, scaledHeight));
-
-	string window_name = "match";
-	namedWindow(window_name, CV_WINDOW_AUTOSIZE);
-	imshow(window_name, dstMat);
-}
-
-/**
  * Displays both the query image and all of the result
  * images in different windows, side by side
  */
@@ -174,10 +131,8 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
         imagePairs[i].first.copyTo(dstMat(Rect(0, 0, scaledWidth, scaledHeight)));
         imagePairs[i].second.copyTo(dstMat(Rect(scaledWidth, 0, scaledWidth, scaledHeight)));
 
-
         namedWindow(window_name, CV_WINDOW_AUTOSIZE);
 	    imshow(window_name, dstMat);
-
 	}
 }
 
@@ -186,7 +141,6 @@ void displayImgsInSeparateWindows(vector<pair <Mat,Mat> > imagePairs)
  * NOTE: The foreground is white and the background is black,
  * because that's the way it needs to be for the built-in drawContours method
  */
-// TODO: Make this return a 3-channel image instead??
 Mat thresholdImg(Mat originalImg)
 {
     Mat thresholdedVer;
@@ -211,7 +165,6 @@ Mat thresholdImg(Mat originalImg)
         {
             for (int j = 0; j < grayVer.cols; j++)
             {
-                //cout << grayVer.at<Vec3b>(i,j) << "\n";
                 // make pixel white if less than threshold val (eg closer to 0)
                 if (grayVer.at<unsigned char>(i,j) > thresholdVal)
                 {
@@ -234,7 +187,6 @@ Mat thresholdImg(Mat originalImg)
         // Calculate the new threshold by averaging the two means.
         float newThreshold = (meanFG+meanBG)/2.0f;
 
-        //cout << fabs(newThreshold-thresholdVal) << "\n";
         if (fabs(newThreshold-thresholdVal) < 1) // if within a certain limit, done thresholding
         {
             isDone = true;
@@ -287,7 +239,6 @@ Mat getDenoisedImg(Mat img)
  * Note that the built-in connectedComponents function must take in a 
  * one-channel image, but our display function requires both to be 3-channel
  */     
-// TODO: Make this display regions in different colors
 vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > thresholdedImages)
 {
     cout << "\nAnalyzing connected components...\n";
@@ -305,7 +256,6 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
         // before we pass it into the RGB mat to return for display
         Mat connCompMat(Size(thresholdedImages[i].second.cols, thresholdedImages[i].second.rows), thresholdedImages[i].second.type());
 
-        // TODO: Make use of testInt to know how many regions there are
         int numSections = connectedComponents(thresholdedImages[i].second, connCompMat); //8-connectedness by default
         
         // Store the connectedComponents output in a RGB version, so 
@@ -326,7 +276,6 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
 
             randColorValsForSections.push_back(colorVect);
         }
-        cout << "number of regions in image " << i << ": " << numSections << "\n";
 
         // For each pixel in the cc mat, check which value it has and color accordingly
         for (int row = 0; row< connCompMat.rows; row++)
@@ -335,8 +284,6 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
             {                    
                 for (int k = 0; k < numSections; k++)
                 {   
-                    // segfault here!!!! Whyyyyy
-                    //cout << "original col,row val: " << (int)connCompMat.at<int>(Point(row, col)) << "\n";
                     if (connCompMat.at<int>(row, col) == k)
                     {
                         outputRGBMat.at<Vec3b>(row, col)[0] = randColorValsForSections[k][0];
@@ -364,32 +311,23 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<
 {
     FeatureVector featureVec;
     
-    vector< vector<Point> > allContours;
     //create mask for entire region and find contours with it
     //from: https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component
     Mat1b mask_region = regionMap > 0; // exclude bg (region val of 0)
     // "RETR_EXTERNAL" excludes inner contours; we only want top-level contours
-    findContours(mask_region, allContours, RETR_EXTERNAL, CHAIN_APPROX_NONE);
+    findContours(mask_region, contoursOut, RETR_EXTERNAL, CHAIN_APPROX_NONE);
     
-
     // choose largest contour
     int largestContourIdx = 0; // default to first (top-left-most) contour
-    for (int i = 0; i < allContours.size(); i++)
+    for (int i = 0; i < contoursOut.size(); i++)
     {
-        if (allContours[i].size() > allContours[largestContourIdx].size())
+        if (contoursOut[i].size() > contoursOut[largestContourIdx].size())
         {
             largestContourIdx = i;
         }
     }
 
-    for (vector<Point> contour : allContours)
-    {
-        contoursOut.push_back(contour);
-    }
-
     // obtain rotated bounding box
-    // NOTE: contoursOut[0] gets outermost contour level, eg not contours contained within other contours
-
     RotatedRect bbox = minAreaRect(contoursOut[largestContourIdx]); 
     bboxOut.angle = bbox.angle;
     bboxOut.center = bbox.center;
@@ -410,11 +348,8 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<
     featureVec.bboxDimRatio = bboxDimRatio;
 
     // calculate ratio of major to minor axis
-    // (x,y),(MA,ma),angle 
-    //cout << contoursOut[i] << "\n";
     RotatedRect rect = fitEllipse(contoursOut[largestContourIdx]);
-    // (the axes might need to be floats)
-    double majorAxisLength = rect.size.width  / 2;    // this would be the longer one
+    double majorAxisLength = rect.size.width  / 2; // width is the longer one
     double minorAxisLength = rect.size.height / 2;
     double axesRatio = majorAxisLength/minorAxisLength;
     if (axesRatio > 1)
@@ -428,12 +363,10 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<
     Moments centralMoments = moments(contoursOut[largestContourIdx], true);
     vector<double> huMoments; 
     HuMoments(centralMoments, huMoments);
-    // the first 6 are rotation, scale, and translation invariant
-    // the 7th could be used for also identifying mirrored images, but we don't need that
+    // the first 6 are rotation, scale, and translation invariant, so we use those
     huMoments.resize(6);
-    // scale them to have compariable value sizes (too small otherwise)
-
     featureVec.huMoments = huMoments;
+
     //get axes endpoints for output
     Point2f vertices[4];
     rect.points(vertices);
@@ -441,8 +374,6 @@ FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<
     axesOut.push_back( Point((vertices[2] + vertices[3])/2.0) );
     axesOut.push_back( Point((vertices[1] + vertices[2])/2.0) );
     axesOut.push_back( Point((vertices[3] + vertices[0])/2.0) );
-
-    // m.mu20,m.mu02, m.mu22
 
     return featureVec;
 }
@@ -556,7 +487,7 @@ void displayBBoxContour(string winName, ImgInfo &imgData)
     imshow(winName, dstMat);
 }
 
-/* *
+/**
  * Writes the given labels and their associated feature vectors out to a file
  */
 void writeFeaturesToFile(vector<ImgInfo> &imagesData)
@@ -649,11 +580,12 @@ double scaledEuclidianDist(FeatureVector &fv1, FeatureVector &fv2, FeatureVector
     dist += fabs(fv1.bboxDimRatio - fv2.bboxDimRatio) / stdDevVector.bboxDimRatio;
     dist += fabs(fv1.axisRatio - fv2.axisRatio) / stdDevVector.axisRatio;
 
+    // add all the huMoments to the distance, but do a l2 normalization first
     double huMomentDist = 0.0;
     double sum1 = 0.0;
     double sum2 = 0.0;
     double sumStdDev = 0.0;
-    for (int i = 0; i < 6; i++) // add all the huMoments to the distance
+    for (int i = 0; i < 6; i++) 
     {   
         sum1 += fv1.huMoments[i] * fv1.huMoments[i];
         sum2 += fv2.huMoments[i] * fv2.huMoments[i];
@@ -681,12 +613,13 @@ string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureV
     string result = "unknown";
 
     // The minimum distance found between the input feature vector and a label database entry
+    // An object above this will be unknown
     double minDist = 0.41; //this value is just from empirical observation
 
     // for each label in the database
     for(map< string, vector<FeatureVector> >::value_type& objectType : db)
     {
-        cout << "looking at entry: " << objectType.first << "\n";
+        //cout << "looking at entry: " << objectType.first << "\n";
 
         double dist = 0;
         //for each feature vector stored with this label
@@ -698,7 +631,7 @@ string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureV
         //average distance across number of entries for this object type/label
         dist /= ((double) objectType.second.size());
 
-        cout << "   distance: " << dist << "\n";
+        //cout << "   distance: " << dist << "\n";
 
         if ( dist < minDist ) //if we find a closer object match, save it
         {
@@ -733,8 +666,6 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
     // for each label in the database
     for(map< string, vector<FeatureVector> >::value_type& objectType : db)
     {
-        //cout << "looking at entry: " << objectType.first << "\n";
-
         //for each feature vector stored with this label
         for ( FeatureVector features : objectType.second )
         {
@@ -952,10 +883,10 @@ int main( int argc, char *argv[] ) {
     char dirName[256];
 
     classifyFuncPtr classifyFuncToUse; 
-    map<string, classifyFuncPtr> stringToFuncMap;
+    map<string, classifyFuncPtr> stringToFuncMap; 
     stringToFuncMap["KNN"] = &classifyByKNN;
 	stringToFuncMap["EUC"] = &classifyByEuclidianDist;
-    classifyFuncToUse = stringToFuncMap["KNN"];
+    classifyFuncToUse = stringToFuncMap["EUC"];
 
 	// If user didn't give directory name
 	if(argc < 2) 
@@ -994,7 +925,8 @@ int main( int argc, char *argv[] ) {
         knownObjectDB[imagesData[i].label].push_back(imagesData[i].features);
     }
 
-    // //Uncomment to display connected components visualizations
+    // Uncomment and comment the rest of main (except waitKey and return)
+    // to display connected components visualizations
     // vector<pair <Mat,Mat> > thresholdedImgs = thresholdImageDB(images);
     // displayImgsInSeparateWindows(getConnectedComponentsVector(thresholdedImgs));
 
@@ -1039,13 +971,11 @@ int main( int argc, char *argv[] ) {
         vector<string> testLabels;
         for (int i = 0; i < testImages.size(); i++)
         {
-            cout << "Image #" << i << " is up now!\n";
             ImgInfo ii = calcImgInfo(testImages[i]);
             string label = classifyFuncToUse( ii.features, knownObjectDB, stdDevVector);
             ii.label = label;
             testLabels.push_back( label );
             testImagesData.push_back( ii );
-
             string win_name = "testing image #" + to_string(i);
             displayBBoxContour(win_name, testImagesData[i]);
         }
