@@ -839,6 +839,64 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
     return (0);
 }
 
+/**
+ * Write confusion matrix into a file confusion.csv
+ * given the true labels and the testing result labels
+ */
+void writeOutConfusionMatrix(vector<string> trueLabels, vector<string> testLabels)
+{
+    ofstream outfile;
+    outfile.open ("confusion.csv");
+
+    //get a list of all label options
+    vector<string> labelList(trueLabels);
+    sort( labelList.begin(), labelList.end() );
+    vector<string>::iterator newEnd = unique( labelList.begin(), labelList.end() );
+    labelList.resize(std::distance(labelList.begin(), newEnd)); 
+    int numLabels = labelList.size();
+
+    cout << "there are " << numLabels << " labels\n";
+
+    //write top line (column headers/true labels)
+    outfile << "Predicted/True";
+    map<string, int> labelToIDX; //stores the matrix idx assigned to each label
+    for (int i = 0; i < numLabels; i++)
+    {
+        outfile << "," << labelList[i];
+        labelToIDX[labelList[i]] = i;
+    }
+    outfile << "\n";
+
+    //count up all entries in confusion matrix
+    int confusionMatrix[numLabels][numLabels] = {0}; //set all entries to 0
+    for (int i = 0; i < numLabels; i++)
+    {
+        confusionMatrix[0][i] = 0;
+    }
+    
+    for (int i = 0; i < trueLabels.size(); i++) //i is index in both true and test labels
+    {
+        int col = labelToIDX[trueLabels[i]]; //columns are true labels
+        int row = labelToIDX[testLabels[i]]; //rows are predicted labels
+        confusionMatrix[row][col] += 1;
+    }
+
+    //write out lines of confusion matrix
+    for (int i = 0; i < numLabels; i++)
+    {
+        outfile << labelList[i]; //row name
+
+        for (int j = 0; j < numLabels; j++) //for each entry in this row
+        {
+            outfile << "," << to_string( confusionMatrix[i][j] );
+        }
+
+        outfile << "\n";
+    }
+
+    outfile.close();
+}
+
 int main( int argc, char *argv[] ) {
     char dirName[256];
 
@@ -875,8 +933,8 @@ int main( int argc, char *argv[] ) {
     FeatureVector stdDevVector = calcFeatureStdDevVector( imagesData );
 
 	//write known label/feature data out to file
-    //cout << "\nWriting out to file...\n";
-    //writeFeaturesToFile(imagesData);
+    cout << "\nWriting out to file...\n";
+    writeFeaturesToFile(imagesData);
 
     //compile map of labels w/ associated feature vectors, for classifying
     map< string, vector<FeatureVector> > knownObjectDB; //for classification stage
@@ -922,22 +980,27 @@ int main( int argc, char *argv[] ) {
         
         //read in testing images
         vector<string> trueLabels; //actual labels from filenames
-        vector<Mat> testImages = readInImageDir( dirName, trueLabels );
+        vector<Mat> testImages = readInImageDir( testingDir, trueLabels );
 
         //compile image info
         cout << "\nProcessing testing images...\n";
         vector<ImgInfo> testImagesData;
+        vector<string> testLabels;
         for (int i = 0; i < testImages.size(); i++)
         {
             cout << "Image #" << i << " is up now!\n";
             ImgInfo ii = calcImgInfo(testImages[i]);
             testImagesData.push_back( ii );
-            testImagesData[i].label = classifyFuncToUse( ii.features, knownObjectDB, stdDevVector);
+            testLabels.push_back( classifyFuncToUse( ii.features, knownObjectDB, stdDevVector) );
 
             string win_name = "testing image #" + to_string(i);
             displayBBoxContour(win_name, testImagesData[i]);
         }
 
+        cout << "\nWriting confusion matrix out to file...\n";
+        writeOutConfusionMatrix(trueLabels, testLabels);
+
+        cout << "Press any key to quit.\n";
         waitKey(0); //close on key press
     }
 		
