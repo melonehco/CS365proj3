@@ -33,6 +33,7 @@ struct FeatureVector
     double fillRatio;
     double bboxDimRatio;
     double axisRatio;
+    vector<double> huMoments;
 };
 
 // A grouping of info about a given image. Can hold multiple objects at a time
@@ -358,7 +359,7 @@ vector< pair<Mat,Mat> > getConnectedComponentsVector(vector< pair <Mat, Mat> > t
  * Currently, we specify the region to be the one with the most points on its contour, 
  * eg the biggest non-background region
  */
-FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut)
+FeatureVector calcFeatureVector(Mat &regionMap, int regionCount, vector< vector<Point> > &contoursOut, RotatedRect &bboxOut)
 {
     FeatureVector featureVec;
     
@@ -421,8 +422,17 @@ FeatureVector calcFeatureVectors(Mat &regionMap, int regionCount, vector< vector
     }
     featureVec.axisRatio = axesRatio;
 
-    Moments m = moments(contoursOut[largestContourIdx], true);
-    // m.mu20,m.mu02, m.mu22
+    // calculate the Hu moments 
+    // source: https://www.learnopencv.com/shape-matching-using-hu-moments-c-python/
+    Moments centralMoments = moments(contoursOut[largestContourIdx], true);
+    vector<double> huMoments; 
+    HuMoments(centralMoments, huMoments);
+    // the first 6 are rotation, scale, and translation invariant
+    // the 7th could be used for also identifying mirrored images, but we don't need that
+    huMoments.resize(6);
+    // scale them to have compariable value sizes (too small otherwise)
+
+    featureVec.huMoments = huMoments;
 
     return featureVec;
 }
@@ -441,7 +451,7 @@ ImgInfo calcImgInfo (Mat &orig)
     int numRegions = connectedComponents(result.thresholded, result.regionMap); //8-connectedness by default
 
     //currently hardcoded to use region 1
-    result.features = calcFeatureVectors(result.regionMap, numRegions, result.contours, result.bbox);
+    result.features = calcFeatureVector(result.regionMap, numRegions, result.contours, result.bbox);
     return result;
 }
 
@@ -543,7 +553,11 @@ void writeFeaturesToFile(vector<ImgInfo> &imagesData)
     for (int i = 0; i < imagesData.size(); i++)
     {
         FeatureVector fv = imagesData[i].features;
-        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio) + " " + to_string(fv.axisRatio);
+        string ftStr = to_string(fv.fillRatio) + " " + to_string(fv.bboxDimRatio) + " " + to_string(fv.axisRatio) + " ";
+        for (double huMoment : fv.huMoments)
+        {
+            ftStr += to_string(huMoment);
+        }
         outfile << imagesData[i].label << " " << ftStr << "\n";
     }
 
@@ -578,17 +592,32 @@ FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
     vector<double> fillRatioVector;
     vector<double> bboxDimRatioVector;
     vector<double> axisRatioVector;
+    vector< vector<double> > huMomentsVector;
     for (ImgInfo ii : imagesData)
     {
         fillRatioVector.push_back( ii.features.fillRatio );
         bboxDimRatioVector.push_back( ii.features.bboxDimRatio );
         axisRatioVector.push_back( ii.features.axisRatio );
+        vector<double> huMomentVector;
+        for (double huMoment : ii.features.huMoments)
+        {
+            huMomentVector.push_back( huMoment);
+        }
+        huMomentsVector.push_back(huMomentVector);
     }
 
     FeatureVector stdDevVector;
     stdDevVector.fillRatio = stdDev( fillRatioVector );
     stdDevVector.bboxDimRatio = stdDev( bboxDimRatioVector );
     stdDevVector.axisRatio = stdDev ( axisRatioVector );
+    
+    // take std dev of each hu moment
+    vector<double> stdDevOfHuMomentsVec;
+    for (vector<double> huMomentVec : huMomentsVector)
+    {
+        stdDevOfHuMomentsVec.push_back( stdDev(huMomentVec) );
+    }
+    stdDevVector.huMoments = stdDevOfHuMomentsVec;
 
     return stdDevVector;
 }
@@ -599,12 +628,28 @@ FeatureVector calcFeatureStdDevVector(vector<ImgInfo> imagesData)
  */
 double scaledEuclidianDist(FeatureVector &fv1, FeatureVector &fv2, FeatureVector &stdDevVector)
 {
-    const int numFeaturesPerObj = 3;
+    const int numFeaturesPerObj = 9;
 
     double dist = 0;
     dist += fabs(fv1.fillRatio - fv2.fillRatio) / stdDevVector.fillRatio;
     dist += fabs(fv1.bboxDimRatio - fv2.bboxDimRatio) / stdDevVector.bboxDimRatio;
     dist += fabs(fv1.axisRatio - fv2.axisRatio) / stdDevVector.axisRatio;
+
+    double huMomentDist = 0.0;
+    double sum1 = 0.0;
+    double sum2 = 0.0;
+    double sumStdDev = 0.0;
+    for (int i = 0; i < 6; i++) // add all the huMoments to the distance
+    {   
+        sum1 += fv1.huMoments[i] * fv1.huMoments[i];
+        sum2 += fv2.huMoments[i] * fv2.huMoments[i];
+        sumStdDev += stdDevVector.huMoments[i] * stdDevVector.huMoments[i];
+    }
+    double sqrt1 = sqrt(sum1);
+    double sqrt2 = sqrt(sum2);
+    double sqrt3 = sqrt(sumStdDev);
+    dist += fabs(sqrt1 - sqrt2) / sqrt3;
+
 
     dist /= (double) numFeaturesPerObj;
 
@@ -622,12 +667,12 @@ string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureV
     string result = "unknown";
 
     // The minimum distance found between the input feature vector and a label database entry
-    double minDist = 0.65; //this value is just from empirical observation
+    double minDist = 0.41; //this value is just from empirical observation
 
     // for each label in the database
     for(map< string, vector<FeatureVector> >::value_type& objectType : db)
     {
-        //cout << "looking at entry: " << objectType.first << "\n";
+        cout << "looking at entry: " << objectType.first << "\n";
 
         double dist = 0;
         //for each feature vector stored with this label
@@ -639,7 +684,7 @@ string classifyByEuclidianDist(FeatureVector &input, map<string, vector<FeatureV
         //average distance across number of entries for this object type/label
         dist /= ((double) objectType.second.size());
 
-        //cout << "   distance: " << dist << "\n";
+        cout << "   distance: " << dist << "\n";
 
         if ( dist < minDist ) //if we find a closer object match, save it
         {
@@ -688,8 +733,8 @@ string classifyByKNN(FeatureVector &input, map<string, vector<FeatureVector> > &
     sort(labelDistPairs.begin(), labelDistPairs.end(), sortBySecondVal);
 
     //find most common label among top n matches
-    int n = 10;
-    int end = labelDistPairs.size() > n ? n : labelDistPairs.size(); //index to stop at
+    int k = 10;
+    int end = labelDistPairs.size() > k ? k : labelDistPairs.size(); //index to stop at
     map<string, int> labelCounts; //count for each label in the top n
     string curLabel, maxLabel; //current label in loop, most common label
     int maxCount = 0;
@@ -789,6 +834,15 @@ int openVideoInput( map<string, vector< FeatureVector> > knownObjectDB, FeatureV
         strStream.str(std::string()); //clear stream
         putText(thresholdedFrame, axisFt, Point(10,110),
                 FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+
+        for (int i = 0; i < 6; i++)
+        {
+            strStream << "hu moment" << i << ": " << std::fixed << std::setprecision(2) << info.features.huMoments[i];
+            string axisFt = strStream.str();
+            strStream.str(std::string()); //clear stream
+            putText(thresholdedFrame, axisFt, Point(10,110+(20*(i+1))),
+                    FONT_HERSHEY_COMPLEX, 0.8, Scalar(255,255,255));
+        }
 
 		if( frame.empty() ) {
 		  printf("frame is empty\n");
